@@ -213,6 +213,48 @@ def test_force_stashes_and_restores_local_edits(tmp_path):
     assert git("status", "--porcelain", cwd=clone)
 
 
+def test_a_checkout_that_is_already_ahead_is_not_an_update(tmp_path):
+    """Fast-forwarding to an ancestor is a silent no-op; do not report it."""
+    _work, clone = build_pair(tmp_path)
+    commit_file(clone, "local.txt", "mine\n", "local work")
+    head = git("rev-parse", "HEAD", cwd=clone)
+
+    result = run_updater(clone)
+    assert result.returncode == 0, result.stderr
+    assert "Nothing to do" in result.stdout
+    assert "updated" not in result.stdout
+    assert git("rev-parse", "HEAD", cwd=clone) == head
+
+
+def test_a_detached_head_follows_the_branch_at_that_commit(tmp_path):
+    """`git checkout <sha>` then updating must not jump to the default branch."""
+    work, clone = build_pair(tmp_path)
+    git("checkout", "-q", "--detach", "HEAD", cwd=clone)
+    commit_file(work, "new.txt", "new\n", "second")
+    git("push", "-q", git("remote", "get-url", "origin", cwd=clone), "main", cwd=work)
+    target = git("rev-parse", "HEAD", cwd=work)
+
+    result = run_updater(clone)
+    assert result.returncode == 0, result.stderr
+    assert "branch       main" in result.stdout
+    assert "HEAD is not on a branch" in result.stdout
+    assert git("rev-parse", "HEAD", cwd=clone) == target
+
+
+def test_an_unrelated_history_is_refused(tmp_path):
+    """A remote with nothing in common must not be merged into this checkout."""
+    _work, clone = build_pair(tmp_path)
+    unrelated = init_repo(tmp_path / "unrelated")
+    commit_file(unrelated, "other.txt", "other\n", "unrelated")
+    git("remote", "add", "elsewhere", str(unrelated), cwd=clone)
+    before = git("rev-parse", "HEAD", cwd=clone)
+
+    result = run_updater(clone, "--remote", "elsewhere")
+    assert result.returncode == 1
+    assert "diverged" in result.stderr
+    assert git("rev-parse", "HEAD", cwd=clone) == before
+
+
 def test_a_diverged_branch_explains_itself(tmp_path):
     work, clone = build_pair(tmp_path)
     commit_file(clone, "local.txt", "mine\n", "local work")
@@ -221,7 +263,8 @@ def test_a_diverged_branch_explains_itself(tmp_path):
 
     result = run_updater(clone)
     assert result.returncode == 1
-    assert "fast-forward" in result.stderr
+    assert "diverged" in result.stderr
+    assert "nothing was changed" in result.stderr
     # The local commit is untouched.
     assert (clone / "local.txt").read_text(encoding="utf-8") == "mine\n"
 

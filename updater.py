@@ -126,10 +126,39 @@ def untracked_files(root: Path) -> list:
 
 
 def current_branch(root: Path) -> str:
+    """The branch this checkout tracks: the current one, or the one at HEAD."""
     name = git("rev-parse", "--abbrev-ref", "HEAD", cwd=root, check=False)
-    # A detached HEAD reports "HEAD"; tracking the default branch is the sane
-    # interpretation of "update me" in that state.
-    return name if name and name != "HEAD" else DEFAULT_BRANCH
+    if name and name != "HEAD":
+        return name
+    # A detached HEAD reports "HEAD".  If some branch points at this commit then
+    # that branch is what "this checkout" means; the default branch is only the
+    # last resort, and update() says so out loud when it is used.
+    # for-each-ref over refs/heads: `git branch --points-at` also prints a
+    # "(HEAD detached at …)" pseudo-entry, which is not a branch name.
+    pointed = git(
+        "for-each-ref",
+        "--points-at",
+        "HEAD",
+        "--format=%(refname:short)",
+        "refs/heads/",
+        cwd=root,
+        check=False,
+    )
+    for candidate in pointed.splitlines():
+        if candidate.strip():
+            return candidate.strip()
+    return DEFAULT_BRANCH
+
+
+def is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", ancestor, descendant],
+        cwd=str(root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
 
 
 def describe(root: Path, revision: str) -> str:
@@ -271,9 +300,16 @@ def update(args: argparse.Namespace) -> int:
     branch = args.branch or current_branch(root)
     before = git("rev-parse", "HEAD", cwd=root)
     version_before = local_version(root)
+    detached = git("rev-parse", "--abbrev-ref", "HEAD", cwd=root, check=False) == "HEAD"
 
     say(not args.quiet, f"repository   {root}")
     say(not args.quiet, f"branch       {branch}  ({describe(root, before)})")
+    if detached:
+        say(
+            not args.quiet,
+            f"note         HEAD is not on a branch; tracking {branch} "
+            "(use --branch to choose another)",
+        )
     say(not args.quiet, f"version      {version_before}")
 
     changes = working_tree_changes(root)
@@ -297,6 +333,27 @@ def update(args: argparse.Namespace) -> int:
     if target == before:
         say(not args.quiet, "", "Already up to date.")
         return EXIT_OK
+
+    if is_ancestor(root, target, before):
+        # HEAD already contains the remote tip: a local commit, or a checkout of
+        # something newer.  Merging an ancestor is a silent no-op, and reporting
+        # that as an update would be a lie.
+        say(
+            not args.quiet,
+            "",
+            f"Nothing to do: {before[:12]} already contains {args.remote}/{branch}.",
+        )
+        return EXIT_OK
+
+    if not is_ancestor(root, before, target):
+        raise UpdateError(
+            f"this checkout and {args.remote}/{branch} have diverged:\n"
+            f"    HEAD          {describe(root, before)}\n"
+            f"    {args.remote}/{branch}  {describe(root, target)}\n"
+            "Fast-forwarding would throw away local commits, so nothing was "
+            "changed.  Reconcile them with git (status, rebase, pull), or "
+            "re-clone the project."
+        )
 
     behind = git("rev-list", "--count", f"HEAD..{target}", cwd=root, check=False) or "?"
     say(not args.quiet, f"incoming     {describe(root, target)}  ({behind} commit(s) ahead)")
@@ -346,6 +403,12 @@ def update(args: argparse.Namespace) -> int:
                 say(not args.quiet, "restored     local changes")
 
     after = git("rev-parse", "HEAD", cwd=root)
+    if after != target:
+        # Belt and braces: never report success unless HEAD is where we aimed.
+        raise UpdateError(
+            f"HEAD is at {after[:12]} after the update, not {target[:12]}.  "
+            "Inspect the checkout with: git status && git log --oneline -5"
+        )
     version_after = local_version(root)
     touched = changed_files(root, before, after)
 
