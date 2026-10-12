@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import random
 import time
 from dataclasses import dataclass, field
 
@@ -28,7 +27,7 @@ from nfvpn.errors import ConfigError, HandshakeError, TransportError
 from nfvpn.session.session import Session, establish_initiator
 from nfvpn.session.streams import Stream, StreamClosedError
 from nfvpn.traffic.shaper import Shaper, get_profile
-from nfvpn.transport import Endpoint, dial, client_context
+from nfvpn.transport import Endpoint, client_context, dial
 
 __all__ = ["Tunnel", "TunnelStats"]
 
@@ -101,8 +100,9 @@ class Tunnel:
     async def connect(self) -> Session:
         """Dial a relay and complete the handshake, trying each endpoint once."""
         async with self._connecting:
-            if self.session is not None:
-                return self._session
+            existing = self.session
+            if existing is not None:
+                return existing
             if self._session is not None:
                 with contextlib.suppress(Exception):
                     await self._session.close()
@@ -122,11 +122,13 @@ class Tunnel:
                     last_error = exc
                     self.stats.failures += 1
                     continue
+                session = self._session
+                assert session is not None  # _establish returned one or raised
                 self._preferred = index
                 self.stats.connects += 1
                 self.stats.last_connect = time.time()
                 self.stats.active_endpoint = endpoint.url()
-                return self._session
+                return session
 
             raise TransportError(
                 f"could not reach any relay ({len(self._endpoints)} tried): {last_error}"

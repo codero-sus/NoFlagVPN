@@ -114,8 +114,8 @@ class ServerConfig:
     tls_key: str | None = None
     profile: str = DEFAULT_PROFILE
     cover_traffic: bool = True
-    identity_file: str = field(default_factory=lambda: str(identity_path("relay")))
-    membership_file: str = field(default_factory=default_membership_path)
+    identity_file: str | Path = field(default_factory=lambda: identity_path("relay"))
+    membership_file: str | Path = field(default_factory=default_membership_path)
     max_streams: int = 256
     window: int = 256 * 1024
     idle_timeout: float = 300.0
@@ -189,13 +189,15 @@ class ServerConfig:
             }),
         }
         if include_secrets:
-            payload["identity_file"] = self.identity_file
-            payload["membership_file"] = self.membership_file
+            # str() on purpose: these may be Path objects, and JSON only has
+            # strings — a config that cannot round-trip is worse than useless.
+            payload["identity_file"] = str(self.identity_file)
+            payload["membership_file"] = str(self.membership_file)
         return payload
 
     @classmethod
     def from_mapping(cls, raw: dict[str, Any]) -> ServerConfig:
-        known = {field_name for field_name in cls.__dataclass_fields__}
+        known = set(cls.__dataclass_fields__)
         unknown = set(raw) - known
         if unknown:
             raise ConfigError(
@@ -230,9 +232,7 @@ class ServerConfig:
 
     def load_identity(self, path: str | None = None) -> Identity:
         """Load the relay's identity, creating one on first run."""
-        key_path = Path(path or self.identity_file)
-        identity = Identity.load_or_create(key_path, name="relay")
-        return identity
+        return Identity.load_or_create(Path(path or self.identity_file), name="relay")
 
 
 @dataclass
@@ -281,7 +281,7 @@ class ClientConfig:
 
     @classmethod
     def from_mapping(cls, raw: dict[str, Any]) -> ClientConfig:
-        known = {field_name for field_name in cls.__dataclass_fields__}
+        known = set(cls.__dataclass_fields__)
         unknown = set(raw) - known
         if unknown:
             raise ConfigError(f"unknown client setting(s): {', '.join(sorted(unknown))}")

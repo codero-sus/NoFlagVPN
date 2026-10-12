@@ -11,13 +11,12 @@ from enum import IntEnum
 
 __all__ = [
     "CTRL_CLOSE",
-    "CTRL_CONFIRM",
     "CTRL_CLOSE_REASONS",
+    "CTRL_CONFIRM",
     "CTRL_OPEN",
     "CTRL_OPENED",
     "CTRL_PING",
     "CTRL_PONG",
-    "CTRL_REKEY",
     "CTRL_WINDOW",
     "HEADER_SIZE",
     "MAX_PAYLOAD",

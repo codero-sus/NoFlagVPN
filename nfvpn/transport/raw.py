@@ -48,7 +48,7 @@ class RawTCPTransport(Transport):
 
     async def open(self) -> None:
         """Nothing to negotiate: the framing is the handshake."""
-        return None
+        return
 
     async def close(self) -> None:
         if self._closed:

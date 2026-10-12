@@ -39,6 +39,8 @@ from typing import Protocol
 
 from nfvpn.core.chacha import (  # noqa: F401  (re-exported for callers)
     BLOCK_SIZE as CHACHA_BLOCK_SIZE,
+)
+from nfvpn.core.chacha import (
     KEY_SIZE,
     NONCE_SIZE,
     chacha20_block,
@@ -61,10 +63,10 @@ __all__ = [
     "hkdf_extract",
     "hkdf_sha256",
     "hmac_sha256",
+    "open_",
     "poly1305_mac",
     "random_bytes",
     "seal",
-    "open_",
     "use_backend",
     "x25519",
     "x25519_base",

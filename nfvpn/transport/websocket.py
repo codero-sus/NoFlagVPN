@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import secrets
 import struct
 from dataclasses import dataclass
@@ -373,10 +374,8 @@ async def _send_cover(
     if server_header:
         headers.insert(1, f"Server: {server_header}")
     writer.write(("\r\n".join(headers) + "\r\n\r\n").encode("ascii") + body)
-    try:
+    with contextlib.suppress(ConnectionError, OSError):
         await writer.drain()
-    except (ConnectionError, OSError):
-        pass
 
 
 # --------------------------------------------------------------------------- #

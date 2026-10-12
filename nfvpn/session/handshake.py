@@ -30,6 +30,7 @@ sessions.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import os
 import struct
@@ -48,7 +49,6 @@ from nfvpn.core.keys import (
 from nfvpn.core.primitives import (
     constant_time_equals,
     generate_x25519_private_key,
-    hmac_sha256,
     public_key_for,
     random_bytes,
     x25519,
@@ -173,11 +173,9 @@ def _burn_key_agreement_work() -> None:
     decoy path performs four of them against random keys and drops the result.
     """
     for _ in range(4):
-        private = generate_x25519_private_key()
-        try:
-            x25519(private, generate_x25519_private_key())
-        except Exception:  # noqa: BLE001 - the value is discarded on purpose
-            pass
+        # Deliberately discarded: the point is the time it takes, not the result.
+        with contextlib.suppress(Exception):
+            x25519(generate_x25519_private_key(), generate_x25519_private_key())
 
 
 class SeenNonceCache:

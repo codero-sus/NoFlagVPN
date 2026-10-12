@@ -30,12 +30,12 @@ from dataclasses import dataclass, field
 from nfvpn.errors import TransportError
 from nfvpn.transport import Endpoint
 from nfvpn.transport.websocket import (
+    OP_BINARY,
     compute_accept,
     perform_client_handshake,
     read_frame,
     write_frame,
 )
-from nfvpn.transport.websocket import OP_BINARY
 
 __all__ = ["ProbeReport", "probe_endpoint"]
 
@@ -290,7 +290,7 @@ async def probe_endpoint(
                 report.websocket_accept_valid = "sec-websocket-accept" in headers
 
             started = time.perf_counter()
-            await writer.write(write_frame(OP_BINARY, _HANDSHAKE_SHAPED_PROBE, mask=True))
+            writer.write(write_frame(OP_BINARY, _HANDSHAKE_SHAPED_PROBE, mask=True))
             await writer.drain()
             try:
                 frame = await asyncio.wait_for(read_frame(reader), timeout=timeout)

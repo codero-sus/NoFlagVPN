@@ -46,6 +46,9 @@ class ShapingProfile:
     name: str
     #: Candidate carrier-message sizes, in bytes, *including* header and tag.
     buckets: tuple[int, ...]
+    #: Pad at all?  ``False`` sends the smallest thing that fits, which is what
+    #: "off" means: no hiding, minimum bytes, maximum speed.
+    pad: bool = True
     #: Additive uniform jitter, in bytes, applied on top of the chosen bucket.
     noise: int = 0
     #: Fixed delay before each record, in seconds.  Zero means "send now".
@@ -83,6 +86,8 @@ class ShapingProfile:
         from nfvpn.framing.constants import HEADER_SIZE, TAG_SIZE
 
         needed = payload_length + 2  # the u16 length prefix lives inside the AEAD
+        if not self.pad:
+            return needed
         overhead = HEADER_SIZE + TAG_SIZE
         target = next((b for b in self.buckets if b - overhead >= needed), None)
         if target is None:
@@ -126,6 +131,7 @@ PROFILES: dict[str, ShapingProfile] = {
     "off": ShapingProfile(
         name="off",
         buckets=(16432,),
+        pad=False,
         noise=0,
         description="No padding, no delay, no cover traffic. Fastest, most visible.",
         mimics="whatever your traffic actually is",

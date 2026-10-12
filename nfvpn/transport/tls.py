@@ -17,6 +17,7 @@ supports HTTPS proxying works; nothing about the outer layer changes.
 
 from __future__ import annotations
 
+import contextlib
 import ssl
 from pathlib import Path
 
@@ -54,10 +55,8 @@ def client_context(
     else:
         context = ssl.create_default_context()
 
-    try:
+    with contextlib.suppress(NotImplementedError):  # pragma: no cover - ancient OpenSSL
         context.set_alpn_protocols(list(DEFAULT_ALPN))
-    except NotImplementedError:  # pragma: no cover - ancient OpenSSL
-        pass
     return context, server_hostname_override
 
 
@@ -82,8 +81,6 @@ def server_context(
     except ssl.SSLError as exc:
         raise ConfigError(f"could not load the certificate/key pair: {exc}") from exc
     context.minimum_version = ssl.TLSVersion.TLSv1_2
-    try:
+    with contextlib.suppress(NotImplementedError):  # pragma: no cover
         context.set_alpn_protocols(list(alpn))
-    except NotImplementedError:  # pragma: no cover
-        pass
     return context

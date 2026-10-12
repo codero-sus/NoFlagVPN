@@ -62,6 +62,11 @@ def build_parser() -> argparse.ArgumentParser:
     member.add_argument("--json", action="store_true")
     member_sub = member.add_subparsers(dest="member_command", required=True)
     member_add = member_sub.add_parser("add", help="authorize a new client")
+    # Arguments repeated at this level use SUPPRESS so that they do not clobber
+    # a value given before the subcommand ("member --config x list").
+    member_add.add_argument(
+        "--config", default=argparse.SUPPRESS, help="membership file (same as the parent option)"
+    )
     member_add.add_argument("--name")
     member_add.add_argument("--key", help="the client's public key")
     member_add.add_argument("--psk", help="pre-shared key (default: generate one)")
@@ -71,10 +76,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--tag", action="append", metavar="KEY=VALUE", help="free-form label (repeatable)"
     )
     member_add.add_argument("--replace", action="store_true")
-    member_add.add_argument("--json", action="store_true")
-    member_sub.add_parser("list", help="show every member")
+    member_add.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
+    member_list = member_sub.add_parser("list", help="show every member")
+    member_list.add_argument(
+        "--config", default=argparse.SUPPRESS, help="membership file (same as the parent option)"
+    )
+    member_list.add_argument("--json", action="store_true", default=argparse.SUPPRESS)
     for name, help_text in (("revoke", "disable a member"), ("remove", "forget a member")):
         sub = member_sub.add_parser(name, help=help_text)
+        # Accept --config after the subcommand as well as before it: both are
+        # what people type, and argparse cannot share an option across levels.
+        sub.add_argument(
+            "--config", default=argparse.SUPPRESS, help="membership file (same as the parent option)"
+        )
         sub.add_argument("--key")
         sub.add_argument("--name")
     member.set_defaults(func=commands.cmd_member)
@@ -118,6 +132,12 @@ def build_parser() -> argparse.ArgumentParser:
     connect.add_argument("--peer-key", help="the relay's public key")
     connect.add_argument("--psk", help="pre-shared key")
     connect.add_argument("--peer-name", help="label for the relay")
+    connect.add_argument(
+        "--failover",
+        action="append",
+        metavar="URL",
+        help="another relay to try when the first is unreachable (repeatable)",
+    )
     connect.add_argument("--listen", help="where the local proxy listens (default 127.0.0.1:8080)")
     connect.add_argument("--profile", choices=profile_names())
     connect.add_argument("--encoding", choices=_ENCODINGS)

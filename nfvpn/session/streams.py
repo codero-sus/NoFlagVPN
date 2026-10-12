@@ -29,8 +29,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import struct
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
 
 from nfvpn.errors import NoFlagVPNError, ProtocolError, TransportError
 from nfvpn.framing.constants import (
@@ -421,7 +421,7 @@ class StreamMultiplexer:
             await self._open_handler(stream, request)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - reported through the stream
+        except Exception as exc:
             self.handler_errors.append(exc)
             with contextlib.suppress(TransportError, NoFlagVPNError):
                 await self.refuse(stream, CloseReason.REMOTE_ERROR)

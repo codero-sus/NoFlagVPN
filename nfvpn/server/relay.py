@@ -133,6 +133,7 @@ class Relay:
         self._sessions: set[Session] = set()
         self._session_tasks: set[asyncio.Task] = set()
         self._stopping = asyncio.Event()
+        self._stats_task: asyncio.Task | None = None
         self._logger = logger or _make_logger(config.log_level, config.log_file)
         self._shaper = Shaper(get_profile(config.profile))
         self._buckets: dict[str, TokenBucket] = {}
@@ -176,7 +177,8 @@ class Relay:
         if not self._servers:
             await self.start()
         if self.config.stats_interval:
-            asyncio.create_task(self._stats_loop(), name="nfvpn-relay-stats")
+            # Runs for the lifetime of the relay; keep a reference to it.
+            self._stats_task = asyncio.create_task(self._stats_loop(), name="nfvpn-relay-stats")
         await self._stopping.wait()
 
     async def stop(self) -> None:
@@ -225,7 +227,7 @@ class Relay:
             self._logger.debug("connection ended: %s", exc)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - a relay must not die on one peer
+        except Exception as exc:
             self.stats.errors += 1
             self._logger.warning("unexpected error on a connection: %r", exc)
         finally:

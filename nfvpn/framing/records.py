@@ -1,4 +1,4 @@
-"""The record format: one authenticated, padded, replay-checked message.
+r"""The record format: one authenticated, padded, replay-checked message.
 
 On the wire a record is::
 
