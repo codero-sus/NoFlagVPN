@@ -430,21 +430,42 @@ def derive_session_keys(
     ephemeral_private: bytes,
     peer_ephemeral_public: bytes,
     transcript: bytes,
+    initiator: bool,
 ) -> tuple[SessionKeys, bytes]:
     """Run the full handshake KEX and return ``(keys, confirmation_tag)``.
 
     ``confirmation_tag`` binds the session to the exact transcript; both sides
     send it and compare, so a relay cannot splice two half-open sessions.
+
+    The four Diffie-Hellman values are:
+
+    ``mix1 = X25519(initiator_ephemeral, responder_static)``
+    ``mix2 = X25519(initiator_static,    responder_ephemeral)``
+    ``ee   = X25519(initiator_ephemeral, responder_ephemeral)``
+    ``ss   = X25519(initiator_static,    responder_static)``
+
+    Each side can only compute two of them directly: we always hold our own
+    ephemeral and static keys and the peer's public halves, so a naive
+    "ephemeral × peer-static" and "static × peer-ephemeral" pair comes out with
+    ``mix1`` and ``mix2`` **swapped** for the responder.  Concatenating them in a
+    fixed order would therefore derive two different masters.  ``initiator``
+    exists to put them back in the agreed order — it is the whole reason this
+    function takes a side.
     """
     if len(psk) != _PSK_SIZE:
         raise ConfigError(f"PSK must be {_PSK_SIZE} bytes, got {len(psk)}")
 
-    dh1 = x25519_shared(ephemeral_private, peer_static_public)      # ephemeral × static
-    dh2 = x25519_shared(static_private, peer_ephemeral_public)      # static × ephemeral
-    dh3 = x25519_shared(ephemeral_private, peer_ephemeral_public)   # ephemeral × ephemeral
-    dh4 = x25519_shared(static_private, peer_static_public)         # static × static
+    own_ephemeral_with_peer_static = x25519_shared(ephemeral_private, peer_static_public)
+    own_static_with_peer_ephemeral = x25519_shared(static_private, peer_ephemeral_public)
+    ephemeral_ephemeral = x25519_shared(ephemeral_private, peer_ephemeral_public)
+    static_static = x25519_shared(static_private, peer_static_public)
 
-    ikm = b"".join((psk, dh1, dh2, dh3, dh4))
+    if initiator:
+        mix1, mix2 = own_ephemeral_with_peer_static, own_static_with_peer_ephemeral
+    else:
+        mix1, mix2 = own_static_with_peer_ephemeral, own_ephemeral_with_peer_static
+
+    ikm = b"".join((psk, mix1, mix2, ephemeral_ephemeral, static_static))
     master = hkdf_sha256(ikm, salt=transcript, info=HANDSHAKE_LABEL, length=KEY_SIZE)
     keys = derive_from_master(master)
     return keys, hkdf_sha256(keys.confirm, None, b"self-check", 32)

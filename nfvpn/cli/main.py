@@ -1,0 +1,202 @@
+"""``python -m nfvpn`` — the command line.
+
+Every command is a plain function in :mod:`nfvpn.cli.commands`; this module only
+builds the parser and turns exceptions into exit codes, because a tool that
+prints a traceback for "you typed the wrong key" is a tool people stop using.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+
+from nfvpn.cli import commands
+from nfvpn.errors import ConfigError, NoFlagVPNError
+from nfvpn.traffic import profile_names
+from nfvpn.version import __version__
+
+__all__ = ["build_parser", "main"]
+
+_ENCODINGS = ("binary", "text")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """The whole command tree."""
+    parser = argparse.ArgumentParser(
+        prog="nfvpn",
+        description=(
+            "NoFlagVPN — a censorship-resistant tunnel that is hard to tell apart "
+            "from ordinary web traffic."
+        ),
+        epilog="Run `nfvpn selftest` after installing to check the whole thing end to end.",
+    )
+    parser.add_argument("--version", action="version", version=f"nfvpn {__version__}")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # -- keygen ------------------------------------------------------------
+    keygen = subparsers.add_parser("keygen", help="create this machine's long-term identity")
+    keygen.add_argument("--name", help="a label for the identity (default: hostname)")
+    keygen.add_argument("--out", help="where to write the private key")
+    keygen.add_argument("--force", action="store_true", help="overwrite an existing file")
+    keygen.add_argument("--psk", action="store_true", help="also print a fresh pre-shared key")
+    keygen.add_argument("--json", action="store_true")
+    keygen.set_defaults(func=commands.cmd_keygen)
+
+    # -- token -------------------------------------------------------------
+    token = subparsers.add_parser("token", help="build a one-line invite for a client")
+    token.add_argument("--config", help="relay config file to read defaults from")
+    token.add_argument("--identity-file")
+    token.add_argument("--membership-file")
+    token.add_argument("--member", help="member whose pre-shared key to embed")
+    token.add_argument("--relay", help="relay URL to put in the token")
+    token.add_argument("--host", help="hostname clients should dial")
+    token.add_argument("--key", help="relay public key (base64url)")
+    token.add_argument("--psk", help="pre-shared key (base64url)")
+    token.add_argument("--name", help="relay name shown to clients")
+    token.add_argument("--json", action="store_true")
+    token.set_defaults(func=commands.cmd_token)
+
+    # -- member ------------------------------------------------------------
+    member = subparsers.add_parser("member", help="manage a relay's allowlist")
+    member.add_argument("--config", help="membership file (default: the config dir)")
+    member.add_argument("--json", action="store_true")
+    member_sub = member.add_subparsers(dest="member_command", required=True)
+    member_add = member_sub.add_parser("add", help="authorize a new client")
+    member_add.add_argument("--name")
+    member_add.add_argument("--key", help="the client's public key")
+    member_add.add_argument("--psk", help="pre-shared key (default: generate one)")
+    member_add.add_argument("--token", help="an invite token produced by the client's keygen")
+    member_add.add_argument("--expires", type=float, help="days until this member expires")
+    member_add.add_argument(
+        "--tag", action="append", metavar="KEY=VALUE", help="free-form label (repeatable)"
+    )
+    member_add.add_argument("--replace", action="store_true")
+    member_add.add_argument("--json", action="store_true")
+    member_sub.add_parser("list", help="show every member")
+    for name, help_text in (("revoke", "disable a member"), ("remove", "forget a member")):
+        sub = member_sub.add_parser(name, help=help_text)
+        sub.add_argument("--key")
+        sub.add_argument("--name")
+    member.set_defaults(func=commands.cmd_member)
+
+    # -- serve -------------------------------------------------------------
+    serve = subparsers.add_parser("serve", help="run the relay")
+    serve.add_argument("--config", help="relay config file")
+    serve.add_argument("--listen", help="host:port (default 127.0.0.1:8443)")
+    serve.add_argument("--ws-path", help="URL path clients dial (default /)")
+    serve.add_argument("--profile", choices=profile_names(), help="traffic shaping profile")
+    serve.add_argument("--encoding", choices=_ENCODINGS, help="how records ride in WebSocket frames")
+    serve.add_argument("--tls-cert")
+    serve.add_argument("--tls-key")
+    serve.add_argument("--no-cover", action="store_true", help="do not send padding while idle")
+    serve.add_argument("--cover-page", help="HTML file served to non-WebSocket requests")
+    serve.add_argument("--server-header", help="Server: header to send ('' to omit)")
+    serve.add_argument("--stats-interval", type=float, help="log counters every N seconds")
+    serve.add_argument("--limit-mbps", type=float, help="cap each member's bandwidth")
+    serve.add_argument("--max-streams", type=int)
+    serve.add_argument("--idle-timeout", type=float)
+    serve.add_argument("--identity-file")
+    serve.add_argument("--membership-file")
+    serve.add_argument("--allow-port", type=int, action="append", help="restrict egress ports")
+    serve.add_argument("--deny-port", type=int, action="append", help="refuse an egress port")
+    serve.add_argument("--allow-network", action="append", help="restrict egress destinations")
+    serve.add_argument("--deny-network", action="append", help="refuse an egress range")
+    serve.add_argument(
+        "--allow-private",
+        action="store_true",
+        help="let the relay dial private addresses (test rigs only)",
+    )
+    serve.add_argument("--log-level", default="info")
+    serve.add_argument("--quiet", action="store_true")
+    serve.set_defaults(func=commands.cmd_serve)
+
+    # -- connect -----------------------------------------------------------
+    connect = subparsers.add_parser("connect", help="run the local proxy")
+    connect.add_argument("--config", help="client config file")
+    connect.add_argument("--token", help="invite token from the relay operator")
+    connect.add_argument("--relay", help="relay URL (wss://host:port/path)")
+    connect.add_argument("--peer-key", help="the relay's public key")
+    connect.add_argument("--psk", help="pre-shared key")
+    connect.add_argument("--peer-name", help="label for the relay")
+    connect.add_argument("--listen", help="where the local proxy listens (default 127.0.0.1:8080)")
+    connect.add_argument("--profile", choices=profile_names())
+    connect.add_argument("--encoding", choices=_ENCODINGS)
+    connect.add_argument("--no-cover", action="store_true")
+    connect.add_argument("--max-streams", type=int)
+    connect.add_argument("--insecure-tls", action="store_true", help="skip certificate checks")
+    connect.add_argument("--ca-file", help="trust only this CA (for self-signed relays)")
+    connect.add_argument("--identity-file")
+    connect.add_argument("--proxy-auth", metavar="USER:PASSWORD")
+    connect.add_argument(
+        "--expose-lan",
+        action="store_true",
+        help="listen on 0.0.0.0 (requires --proxy-auth)",
+    )
+    connect.add_argument("--stats-interval", type=float, default=0.0)
+    connect.add_argument("--log-level", default="info")
+    connect.add_argument("--quiet", action="store_true")
+    connect.set_defaults(func=commands.cmd_connect)
+
+    # -- probe / selftest / doctor / demo / version ------------------------
+    probe = subparsers.add_parser(
+        "probe", help="look at an endpoint the way a network scanner would"
+    )
+    probe.add_argument("target", help="host, host:port, or a full wss:// URL")
+    probe.add_argument("--path", help="URL path to request")
+    probe.add_argument("--timeout", type=float, default=6.0)
+    probe.add_argument("--rounds", type=int, default=3, help="how many junk probes to send")
+    probe.add_argument("--insecure", action="store_true", help="ignore TLS certificate errors")
+    probe.add_argument("--json", action="store_true")
+    probe.set_defaults(func=commands.cmd_probe)
+
+    selftest = subparsers.add_parser(
+        "selftest", help="run the whole stack on loopback and check every promise"
+    )
+    selftest.add_argument("--json", action="store_true")
+    selftest.add_argument("--quiet", action="store_true")
+    selftest.set_defaults(func=commands.cmd_selftest)
+
+    doctor = subparsers.add_parser("doctor", help="check this machine's setup and traffic shape")
+    doctor.add_argument("--json", action="store_true")
+    doctor.set_defaults(func=commands.cmd_doctor)
+
+    demo = subparsers.add_parser("demo", help="start a relay and a client locally, for a first look")
+    demo.add_argument("--directory", help="where to keep the demo keys")
+    demo.add_argument("--relay-port", type=int, default=8443)
+    demo.add_argument("--proxy-port", type=int, default=8080)
+    demo.add_argument("--profile", default="balanced", choices=profile_names())
+    demo.add_argument("--log-level", default="warning")
+    demo.set_defaults(func=commands.cmd_demo)
+
+    version = subparsers.add_parser("version", help="print version and environment")
+    version.add_argument("--json", action="store_true")
+    version.set_defaults(func=commands.cmd_version)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point.  Returns a process exit code."""
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    function = getattr(args, "func", None)
+    if function is None:  # pragma: no cover - argparse enforces a subcommand
+        parser.print_help()
+        return commands.EXIT_USAGE
+    try:
+        return int(function(args) or 0)
+    except ConfigError as exc:
+        print(f"nfvpn: {exc}", file=sys.stderr)
+        return commands.EXIT_USAGE
+    except NoFlagVPNError as exc:
+        print(f"nfvpn: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return commands.EXIT_FAILURE
+    except KeyboardInterrupt:  # pragma: no cover - interactive
+        print("", file=sys.stderr)
+        return 130
+    except BrokenPipeError:  # pragma: no cover - `| head`
+        return commands.EXIT_OK
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
