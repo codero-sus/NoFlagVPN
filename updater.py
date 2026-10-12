@@ -63,8 +63,13 @@ class UpdateError(Exception):
 # --------------------------------------------------------------------------- #
 # small helpers
 # --------------------------------------------------------------------------- #
-def git(*args: str, cwd: Path, check: bool = True) -> str:
-    """Run git and return its stdout, or raise :class:`UpdateError`."""
+def git(*args: str, cwd: Path, check: bool = True, raw: bool = False) -> str:
+    """Run git and return its stdout, or raise :class:`UpdateError`.
+
+    ``raw`` keeps git's output exactly as written.  That matters for porcelain
+    output, whose first column is a space for an unstaged change: stripping the
+    output would eat it and shift every path by one character.
+    """
     if shutil.which("git") is None:
         raise UpdateError(
             "git is not installed.  Install it, or download the project again from "
@@ -80,7 +85,7 @@ def git(*args: str, cwd: Path, check: bool = True) -> str:
     if check and result.returncode != 0:
         detail = (result.stderr or result.stdout).strip().splitlines()
         raise UpdateError(f"git {' '.join(args)} failed: {detail[-1] if detail else 'no output'}")
-    return result.stdout.strip()
+    return result.stdout if raw else result.stdout.strip()
 
 
 def script_root() -> Path:
@@ -115,13 +120,13 @@ def working_tree_changes(root: Path) -> list:
     notes in it is normal, and git itself refuses a fast-forward that would
     overwrite one.  They are reported separately and left alone.
     """
-    output = git("status", "--porcelain", "--untracked-files=no", cwd=root, check=False)
+    output = git("status", "--porcelain", "--untracked-files=no", cwd=root, check=False, raw=True)
     return [line[3:].strip() for line in output.splitlines() if line.strip()]
 
 
 def untracked_files(root: Path) -> list:
     """Files git is not tracking and would not overwrite, ignored files aside."""
-    output = git("ls-files", "--others", "--exclude-standard", cwd=root, check=False)
+    output = git("ls-files", "--others", "--exclude-standard", cwd=root, check=False, raw=True)
     return [line.strip() for line in output.splitlines() if line.strip()]
 
 

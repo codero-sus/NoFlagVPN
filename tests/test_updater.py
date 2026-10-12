@@ -132,6 +132,10 @@ def test_uncommitted_changes_stop_the_update(tmp_path):
     result = run_updater(clone)
     assert result.returncode == 1
     assert "uncommitted changes" in result.stderr
+    # The full path, not one shifted by a character: git's porcelain output
+    # starts with a space for an unstaged change, and stripping it truncates
+    # every name in the list.
+    assert "    nfvpn/version.py" in result.stderr
     assert (clone / "nfvpn" / "version.py").read_text(encoding="utf-8") == "# edited by hand\n"
     assert git("rev-parse", "HEAD", cwd=clone) == before
 
