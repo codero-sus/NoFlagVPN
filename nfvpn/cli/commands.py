@@ -31,7 +31,7 @@ from nfvpn.core.encoding import b64d, b64e, fingerprint
 from nfvpn.core.keys import Identity, Member, MembershipStore, generate_psk, parse_psk
 from nfvpn.core.primitives import backend_name
 from nfvpn.detect.probe import format_report, probe_endpoint
-from nfvpn.errors import ConfigError, NoFlagVPNError
+from nfvpn.errors import AuthenticationError, ConfigError, NoFlagVPNError
 from nfvpn.server.egress import EgressPolicy
 from nfvpn.server.relay import Relay
 from nfvpn.tokens import Invite, decode_invite
@@ -118,7 +118,14 @@ def _install_signals(loop, *, on_stop, on_reload=None) -> bool:
 # keygen / token / member
 # --------------------------------------------------------------------------- #
 def cmd_keygen(args) -> int:
-    """Create a long-term identity, and optionally a pre-shared key."""
+    """Create a long-term identity, and optionally a pre-shared key.
+
+    The file name follows ``--name``, and the two defaults that matter are
+    ``relay`` (what ``nfvpn serve`` loads) and ``client`` (what ``nfvpn connect``
+    loads).  Naming anything else works, but then ``--identity-file`` has to be
+    passed to the command that uses the key — ``nfvpn connect`` says so when the
+    handshake is refused.
+    """
     target = Path(args.out).expanduser() if args.out else identity_path(args.name or "identity")
     if target.exists() and not args.force:
         raise ConfigError(f"{target} already exists (use --force to overwrite)")
@@ -235,7 +242,19 @@ def cmd_member(args) -> int:
             expires_at=expires_at,
             tags=dict(args.tag or []),
         )
-        store.add(member, replace=args.replace)
+        # A name means "that machine".  Re-adding it with a different key is a
+        # re-install, not a second laptop, so the old entry must not linger —
+        # two members answering to "laptop" is how you lose track of who can use
+        # your relay.
+        previous = store.get(name)
+        if previous is not None and previous.public_key != public_key:
+            if not args.replace:
+                raise ConfigError(
+                    f"a member named {name!r} already exists with a different key "
+                    f"({previous.short_id}); pass --replace to re-key it"
+                )
+            store.remove(previous.public_key)
+        store.add(member, replace=True)
         store.save()
 
         result = {
@@ -257,23 +276,28 @@ def cmd_member(args) -> int:
         return EXIT_OK
 
     if args.member_command in ("revoke", "remove"):
-        key_bytes = b64d(args.key) if args.key else None
-        if key_bytes is None and args.name:
-            found = store.get(args.name)
-            if found is None:
+        keys: list[bytes] = []
+        if args.key:
+            keys.append(b64d(args.key))
+        if args.name:
+            # Revoke every member answering to that name: if duplicates exist,
+            # leaving one enabled is the failure mode that matters.
+            matches = [member for member in store if member.name == args.name]
+            if not matches:
                 raise ConfigError(f"no member named {args.name!r}")
-            key_bytes = found.public_key
-        if key_bytes is None:
+            keys.extend(member.public_key for member in matches)
+        if not keys:
             raise ConfigError("say which member: --key <public key> or --name <name>")
-        changed = (
-            store.revoke(key_bytes)
-            if args.member_command == "revoke"
-            else store.remove(key_bytes)
-        )
+        changed = 0
+        for key_bytes in keys:
+            changed += store.revoke(key_bytes) if args.member_command == "revoke" else store.remove(key_bytes)
         if not changed:
             raise ConfigError("no member matched that key")
         store.save()
-        _print(f"{args.member_command}d; {len(store)} member(s) remain in {store.path}")
+        _print(
+            f"{args.member_command}d {changed} member(s); "
+            f"{len(store)} remain in {store.path}"
+        )
         return EXIT_OK
 
     raise ConfigError(f"unknown member subcommand {args.member_command!r}")
@@ -524,9 +548,21 @@ def cmd_connect(args) -> int:
 
         log = logging.getLogger("nfvpn.cli")
         log.info("client identity: %s (%s)", identity.name, identity.short_id)
+        log.info("public key: %s", b64e(identity.public_key))
         log.info("connecting to %s", config.relay)
         try:
             await tunnel.connect()
+        except AuthenticationError as exc:
+            # The most likely cause by far is a key the relay has never seen, so
+            # say so and print the exact command that fixes it.
+            log.error("the relay refused this identity: %s", exc)
+            log.error(
+                "on the relay, authorize this machine with:\n"
+                "    nfvpn member add --name %s --key %s",
+                identity.name,
+                b64e(identity.public_key),
+            )
+            return EXIT_FAILURE
         except (NoFlagVPNError, OSError) as exc:
             log.error("could not establish the tunnel: %s", exc)
             return EXIT_FAILURE

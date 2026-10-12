@@ -40,16 +40,21 @@ public address:
 
 ```bash
 nfvpn keygen --name relay                 # prints the relay's public key
-nfvpn member add --name laptop --key <the laptop's public key> --json
+nfvpn member add --name laptop --key <the laptop's public key>
 nfvpn token --member laptop --relay wss://relay.example/cdn
 ```
 
 On the laptop:
 
 ```bash
-nfvpn keygen --name laptop --json         # copy `public_key` back to the relay
+nfvpn keygen --name client --json         # copy `public_key` back to the relay
 nfvpn connect --token 'nfvpn://…'         # a SOCKS5 + HTTP proxy on 127.0.0.1:8080
 ```
+
+`--name` decides the file name, and the defaults that matter are `relay.key`
+(what `serve` loads) and `client.key` (what `connect` loads).  If you use another
+name, pass `--identity-file` to `connect` — it prints the exact command to
+authorize the machine with when a relay refuses the handshake.
 
 Point your browser (or game, or `curl`) at `socks5://127.0.0.1:8080` and you are
 done.  The token carries the address, the relay's public key and the pre-shared

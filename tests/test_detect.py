@@ -160,6 +160,27 @@ def test_the_audit_object_collects_findings():
     assert record.as_dict()["warnings"] == 1
 
 
+async def test_a_bare_host_port_is_tried_over_tls_and_then_plain(fake):
+    """A scanner tries both; so do we, and the report names what answered."""
+    report = await probe_endpoint(f"127.0.0.1:{fake.port}", rounds=1, timeout=3.0)
+    assert report.reachable is True
+    assert report.target.startswith("ws://"), report.target
+    assert report.websocket_upgrade is True
+
+
+async def test_nothing_answering_reports_every_scheme_tried():
+    report = await probe_endpoint("127.0.0.1:1", rounds=1, timeout=1.0)
+    assert report.reachable is False
+    assert len(report.errors) >= 1
+    assert all("127.0.0.1:1" in error for error in report.errors)
+
+
+def test_candidates_respect_an_explicit_scheme():
+    assert [endpoint.scheme for endpoint in probe._candidates("wss://x/")] == ["wss"]
+    assert [endpoint.scheme for endpoint in probe._candidates("tcp://x:1")] == ["tcp"]
+    assert [endpoint.scheme for endpoint in probe._candidates("x:443")] == ["wss", "ws"]
+
+
 def test_probe_helpers_are_exported():
     assert probe.format_report is format_report
     assert probe.DEFAULT_TIMEOUT > 0

@@ -35,7 +35,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     # -- keygen ------------------------------------------------------------
     keygen = subparsers.add_parser("keygen", help="create this machine's long-term identity")
-    keygen.add_argument("--name", help="a label for the identity (default: hostname)")
+    keygen.add_argument(
+        "--name",
+        help=(
+            "label for the identity, and the file it is written to "
+            "(default: hostname; use 'relay' on the relay and 'client' on the client)"
+        ),
+    )
     keygen.add_argument("--out", help="where to write the private key")
     keygen.add_argument("--force", action="store_true", help="overwrite an existing file")
     keygen.add_argument("--psk", action="store_true", help="also print a fresh pre-shared key")
