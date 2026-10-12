@@ -176,6 +176,40 @@ class ProbeReport:
         }
 
 
+def _candidates(target: str) -> list[Endpoint]:
+    """Which endpoints to try for ``target``.
+
+    With an explicit scheme, exactly that one.  Without one, TLS first and then
+    plain — which is what a scanner does, and what makes ``nfvpn probe host:443``
+    work against a relay that is fronted by a TLS terminator, and ``host:8443``
+    work against one that is not.
+    """
+    if "://" in target:
+        return [Endpoint.parse(target)]
+    return [Endpoint.parse(f"wss://{target}"), Endpoint.parse(f"ws://{target}")]
+
+
+async def _connect(
+    endpoint: Endpoint, *, timeout: float, insecure: bool
+) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, ssl.SSLContext | None]:
+    context: ssl.SSLContext | None = None
+    if endpoint.uses_tls:
+        context = ssl.create_default_context()
+        if insecure:
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_connection(
+            endpoint.host,
+            endpoint.port,
+            ssl=context,
+            server_hostname=endpoint.host if context else None,
+        ),
+        timeout=timeout,
+    )
+    return reader, writer, context
+
+
 async def probe_endpoint(
     target: str,
     *,
@@ -188,26 +222,23 @@ async def probe_endpoint(
     endpoint = Endpoint.parse(target if "://" in target else f"wss://{target}")
     report = ProbeReport(target=endpoint.url())
 
-    context: ssl.SSLContext | None = None
-    if endpoint.uses_tls:
-        context = ssl.create_default_context()
-        if insecure:
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-
-    try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(
-                endpoint.host,
-                endpoint.port,
-                ssl=context,
-                server_hostname=endpoint.host if context else None,
-            ),
-            timeout=timeout,
-        )
-    except (OSError, asyncio.TimeoutError, ssl.SSLError) as exc:
-        report.errors.append(f"{type(exc).__name__}: {exc}")
+    connected: tuple[asyncio.StreamReader, asyncio.StreamWriter, ssl.SSLContext | None] | None = None
+    attempts: list[str] = []
+    for candidate in _candidates(target):
+        try:
+            connected = await _connect(candidate, timeout=timeout, insecure=insecure)
+        except (OSError, asyncio.TimeoutError, ssl.SSLError) as exc:
+            attempts.append(f"{candidate.scheme}://{candidate.authority}: {type(exc).__name__}")
+            continue
+        endpoint = candidate
+        report.target = candidate.url()
+        break
+    if connected is None:
+        # Nothing answered: report every scheme that was tried, because "TLS
+        # refused, plain HTTP open" is itself a finding.
+        report.errors.extend(attempts)
         return report
+    reader, writer, context = connected
 
     report.reachable = True
     if endpoint.uses_tls:
