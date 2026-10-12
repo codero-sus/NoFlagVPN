@@ -95,14 +95,16 @@ def local_version(root: Path) -> str:
         text = version_file.read_text(encoding="utf-8")
     except OSError:
         return "unknown"
-    match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
-    if match:
-        return match.group(1)
     numbers = re.search(r"__version_info__\s*=\s*\(([^)]*)\)", text)
     if numbers:
         parts = [part.strip() for part in numbers.group(1).split(",") if part.strip()]
         if parts:
             return ".".join(parts)
+    # Only a literal version, and only one that starts with a digit: this module
+    # may define __version__ as a computed string such as ".".join(...).
+    match = re.search(r'^__version__\s*=\s*["\'](\d[^"\']*)["\']', text, re.MULTILINE)
+    if match:
+        return match.group(1)
     return "unknown"
 
 
@@ -194,11 +196,11 @@ def changed_files(root: Path, old: str, new: str) -> list:
     return [line for line in output.splitlines() if line.strip()]
 
 
-def reinstall(root: Path, quiet: bool) -> None:
+def reinstall(root: Path, verbose: bool) -> None:
     """Refresh the editable install so the console script matches the checkout."""
     if not is_installed_package() and not shutil.which("nfvpn"):
         return
-    say(quiet, "reinstalling the package (pyproject.toml changed)…")
+    say(verbose, "reinstalling the package (pyproject.toml changed)…")
     result = subprocess.run(
         [sys.executable, "-m", "pip", "install", "--quiet", "--editable", str(root)],
         capture_output=True,
@@ -208,17 +210,18 @@ def reinstall(root: Path, quiet: bool) -> None:
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip().splitlines()
         say(
-            quiet,
+            verbose,
             "  pip could not reinstall it (that is not fatal; the checkout is updated):",
             f"  {detail[-1] if detail else 'no output'}",
             "  fix it later with:  python -m pip install -e .",
         )
     else:
-        say(quiet, "  reinstalled.")
+        say(verbose, "  reinstalled.")
 
 
-def say(quiet: bool, *lines: str) -> None:
-    if not quiet:
+def say(verbose: bool, *lines: str) -> None:
+    """Print unless the caller asked for quiet; ``verbose`` is ``not --quiet``."""
+    if verbose:
         for line in lines:
             print(line, flush=True)
 
@@ -249,7 +252,7 @@ def update(args: argparse.Namespace) -> int:
             "Commit or discard them, or run the updater with --force to have them "
             "stashed and restored around the update."
         )
-    if changes:
+    if changes and not args.check:
         say(not args.quiet, f"note         {len(changes)} uncommitted file(s) will be stashed")
 
     say(not args.quiet, f"fetching     {args.remote}/{branch} …")
@@ -318,7 +321,7 @@ def update(args: argparse.Namespace) -> int:
         say(not args.quiet, f"  … and {len(touched) - 15} more file(s)")
 
     if any(name in touched for name in _REINSTALL_TRIGGERS) and not args.no_install:
-        reinstall(root, args.quiet)
+        reinstall(root, not args.quiet)
 
     running = running_processes()
     if running:
