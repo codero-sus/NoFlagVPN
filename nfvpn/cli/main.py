@@ -201,10 +201,45 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+#: Options whose value is an opaque base64url blob.  A freshly generated key
+#: starts with "-" about once in 69 keys, and argparse would read that as an
+#: option name; these are re-joined as ``--opt=value`` before parsing.
+_OPAQUE_VALUE_OPTIONS = frozenset(
+    {"--key", "--psk", "--token", "--peer-key", "--ca-file", "--proxy-auth", "--invite"}
+)
+
+
+def _rejoin_opaque_values(argv: list[str]) -> list[str]:
+    """Rewrite ``--key -AbC…`` as ``--key=-AbC…`` so argparse accepts it.
+
+    Without this, one key in ~69 is unreachable from the command line through no
+    fault of the person typing it.
+    """
+    fixed: list[str] = []
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if (
+            item in _OPAQUE_VALUE_OPTIONS
+            and index + 1 < len(argv)
+            and argv[index + 1].startswith("-")
+            and argv[index + 1] not in ("-", "--")
+        ):
+            fixed.append(f"{item}={argv[index + 1]}")
+            index += 2
+            continue
+        fixed.append(item)
+        index += 1
+    return fixed
+
+
 def main(argv: list[str] | None = None) -> int:
     """Entry point.  Returns a process exit code."""
     parser = build_parser()
-    args = parser.parse_args(argv)
+    # sys.argv[1:] rather than argv=None, so the opaque-value rewrite below
+    # applies to the real command line too and not only to in-process calls.
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(_rejoin_opaque_values(arguments))
     function = getattr(args, "func", None)
     if function is None:  # pragma: no cover - argparse enforces a subcommand
         parser.print_help()

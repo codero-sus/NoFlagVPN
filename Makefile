@@ -2,7 +2,7 @@ PY ?= python3
 VENV ?= .venv
 BIN := $(VENV)/bin
 
-.PHONY: help venv dev test lint fmt typecheck check selftest demo clean
+.PHONY: help venv dev test lint fmt typecheck check selftest demo update clean
 
 help:
 	@echo "NoFlagVPN make targets"
@@ -12,6 +12,7 @@ help:
 	@echo "  make check      lint + typecheck + test (what CI runs)"
 	@echo "  make selftest   end-to-end loopback: server <- client <- origin, asserts no leaks"
 	@echo "  make demo       start a local demo server + client against a local origin"
+	@echo "  make update     pull the latest code into this checkout (updater.py)"
 	@echo "  make clean      remove caches"
 
 venv:
@@ -25,11 +26,11 @@ test:
 	$(BIN)/python -m pytest
 
 lint:
-	$(BIN)/ruff check nfvpn tests
+	$(BIN)/ruff check nfvpn tests tools updater.py
 
 fmt:
-	$(BIN)/ruff check --fix nfvpn tests
-	$(BIN)/ruff format nfvpn tests
+	$(BIN)/ruff check --fix nfvpn tests tools updater.py
+	$(BIN)/ruff format nfvpn tests tools updater.py
 
 typecheck:
 	$(BIN)/mypy
@@ -41,6 +42,12 @@ selftest:
 
 demo:
 	$(BIN)/python -m nfvpn demo
+
+update:
+	$(PY) updater.py
+
+update-check:
+	$(PY) updater.py --check
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache
