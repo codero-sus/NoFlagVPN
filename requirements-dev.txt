@@ -1,0 +1,13 @@
+# Development / CI extra. Install with:  pip install -r requirements-dev.txt
+# The runtime never needs any of these.
+
+pytest>=7.4
+pytest-asyncio>=0.23
+pytest-timeout>=2.2
+
+# Used to (a) cross-validate the pure-Python crypto against an independent
+# implementation and (b) benchmark the accelerated backend.
+cryptography>=42.0
+
+ruff>=0.5
+mypy>=1.10
