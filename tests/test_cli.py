@@ -11,6 +11,7 @@ import json
 
 import pytest
 from nfvpn.cli.main import build_parser, main
+from nfvpn.core.encoding import b64d, fingerprint
 from nfvpn.tokens import decode_invite
 
 
@@ -144,6 +145,31 @@ def test_member_revoke_then_list(capsys, isolated_config):
     run_ok(capsys, "member", "remove", "--config", str(store), "--name", "k")
     listed = json.loads(run_ok(capsys, "member", "list", "--config", str(store), "--json"))
     assert listed["members"] == []
+
+
+def test_a_key_that_starts_with_a_dash_is_accepted(capsys, isolated_config):
+    """One generated key in ~69 starts with "-", and argparse would eat it.
+
+    A leading dash is ordinary base64url, so it must be read as the value of the
+    option in front of it rather than as a new option.
+    """
+    generated = run_json(capsys, "keygen", "--name", "dash", "--json")["public_key"]
+    assert set(generated) <= set(
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    )
+
+    store = isolated_config / "members.json"
+    key = "-" + generated[1:]
+    run_ok(capsys, "member", "add", "--config", str(store), "--name", "dash", "--key", key)
+
+    listed = json.loads(run_ok(capsys, "member", "list", "--config", str(store), "--json"))
+    assert listed["members"][0]["fingerprint"] == fingerprint(b64d(key))
+
+    # The same applies wherever a key is passed straight through.
+    token = decode_invite(
+        run_ok(capsys, "token", "--relay", "ws://relay.example/cdn", "--key", key, "--psk", "shared").strip()
+    )
+    assert token.peer_public_key == key
 
 
 def test_tokens_without_an_identity_fail_clearly(capsys):

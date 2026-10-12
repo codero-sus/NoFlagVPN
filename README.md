@@ -29,6 +29,24 @@ Add the package to your environment to get the `nfvpn` command:
 pip install -e .                 # or: pip install -e '.[fast]' for acceleration
 ```
 
+## Updating
+
+```bash
+./updater.sh            # Linux / macOS
+updater.bat             # Windows
+python updater.py       # any of them; identical behaviour
+```
+
+It fast-forwards the checkout, tells you what changed, and reinstalls the
+console script if `pyproject.toml` moved.  Useful flags: `--check` (report
+whether an update exists, exit `10` if it does), `--force` (stash local changes
+and update anyway), `--branch`, `--dry-run`, `--quiet`.  `make update` does the
+same thing.
+
+Your keys are never involved: they live in the config directory
+(`~/.config/nfvpn`, or `NFVPN_CONFIG_DIR`), not in the repository, so updating
+cannot touch them.
+
 `cryptography` is optional: if it is present, bulk encryption is roughly 70×
 faster.  If it is not, a pure-Python ChaCha20-Poly1305 (verified against the
 RFC 8439 vectors on every test run) does the work.
@@ -151,6 +169,7 @@ detection is between you and that service's terms.
 make venv && make dev          # .venv with pytest, ruff, mypy, cryptography
 make check                     # lint + typecheck + tests
 make selftest                  # the end-to-end loopback suite
+make update                    # pull the latest code into this checkout
 python tools/gen_chacha.py --check   # the generated ChaCha kernels are in sync
 ```
 

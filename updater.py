@@ -109,9 +109,20 @@ def local_version(root: Path) -> str:
 
 
 def working_tree_changes(root: Path) -> list:
-    """Paths with uncommitted changes, staged or not."""
-    output = git("status", "--porcelain", cwd=root, check=False)
+    """Tracked paths with uncommitted changes, staged or not.
+
+    Untracked files are deliberately *not* included: a checkout with someone's
+    notes in it is normal, and git itself refuses a fast-forward that would
+    overwrite one.  They are reported separately and left alone.
+    """
+    output = git("status", "--porcelain", "--untracked-files=no", cwd=root, check=False)
     return [line[3:].strip() for line in output.splitlines() if line.strip()]
+
+
+def untracked_files(root: Path) -> list:
+    """Files git is not tracking and would not overwrite, ignored files aside."""
+    output = git("ls-files", "--others", "--exclude-standard", cwd=root, check=False)
+    return [line.strip() for line in output.splitlines() if line.strip()]
 
 
 def current_branch(root: Path) -> str:
@@ -136,9 +147,27 @@ def is_installed_package() -> bool:
         return False
 
 
+def redact(command: str) -> str:
+    """Hide the value of any secret-bearing flag before printing a command line.
+
+    A running ``nfvpn connect`` has an invite token in its argv, and the token
+    contains the pre-shared key.  The updater prints command lines, so it
+    redacts them first.
+    """
+    secret_flags = ("--token", "--psk")
+    words = command.split()
+    for index, word in enumerate(words[:-1]):
+        if word.split("=", 1)[0] in secret_flags:
+            if "=" in word:
+                words[index] = word.split("=", 1)[0] + "=…"
+            else:
+                words[index + 1] = "…"
+    return " ".join(words)
+
+
 def running_processes() -> list:
     """Best-effort list of running nfvpn commands, so we can warn about restarts."""
-    names = []
+    found = []
     try:
         if os.name == "nt":  # pragma: no cover - Windows
             output = subprocess.run(
@@ -148,17 +177,21 @@ def running_processes() -> list:
                 check=False,
             ).stdout
             if "python" in output.lower():
-                names.append("python.exe")
+                found.append(("", "python.exe (check it is the right one)"))
         else:
             listing = subprocess.run(
-                ["ps", "-eo", "args"], capture_output=True, text=True, check=False
+                ["ps", "-eo", "pid,args"], capture_output=True, text=True, check=False
             ).stdout
-            for line in listing.splitlines():
-                if "nfvpn" in line and (" serve" in line or " connect" in line):
-                    names.append(line.strip()[:120])
+            for line in listing.splitlines()[1:]:
+                pid, _, command = line.strip().partition(" ")
+                if "nfvpn" not in command:
+                    continue
+                if " serve" not in command and " connect" not in command:
+                    continue
+                found.append((pid, redact(command.strip())[:110]))
     except Exception:  # pragma: no cover - a missing ps is not an error
         return []
-    return names
+    return found
 
 
 # --------------------------------------------------------------------------- #
@@ -244,6 +277,9 @@ def update(args: argparse.Namespace) -> int:
     say(not args.quiet, f"version      {version_before}")
 
     changes = working_tree_changes(root)
+    loose = untracked_files(root) if not args.check else []
+    if loose and not args.quiet:
+        say(not args.quiet, f"note         {len(loose)} untracked file(s) will be left alone")
     if changes and not (args.force or args.check):
         listing = "\n".join(f"    {name}" for name in changes[:10])
         raise UpdateError(
@@ -279,8 +315,10 @@ def update(args: argparse.Namespace) -> int:
 
     stashed = False
     if changes and args.force:
+        # Tracked changes only: untracked files are none of the update's
+        # business and stashing them can sweep up a whole build directory.
         say(not args.quiet, "stashing     local changes …")
-        git("stash", "push", "--include-untracked", "-m", STASH_MESSAGE, cwd=root)
+        git("stash", "push", "-m", STASH_MESSAGE, cwd=root)
         stashed = True
 
     try:
@@ -329,7 +367,7 @@ def update(args: argparse.Namespace) -> int:
             not args.quiet,
             "",
             "Restart these to run the new code:",
-            *[f"    {line}" for line in running[:5]],
+            *[f"    pid {pid:<7} {command}" if pid else f"    {command}" for pid, command in running[:5]],
         )
 
     say(not args.quiet, "", "Done.  `nfvpn selftest` will confirm everything still works.")
