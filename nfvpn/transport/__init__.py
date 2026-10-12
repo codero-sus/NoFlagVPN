@@ -98,10 +98,16 @@ class Endpoint:
             rest = f"{host}{tail}"
             port = int(tail[1:]) if tail.startswith(":") and tail[1:] else _DEFAULT_PORTS[scheme]
         else:
-            host, _, port_text = rest.rpartition(":")
-            host = host or rest
+            if ":" in rest:
+                host, _, port_text = rest.rpartition(":")
+            else:
+                host, port_text = rest, ""
             port = int(port_text) if port_text else _DEFAULT_PORTS[scheme]
 
+        if not host:
+            raise ConfigError(f"endpoint {text!r} has no host")
+        if not 0 < port < 65536:
+            raise ConfigError(f"endpoint {text!r} has an out-of-range port {port}")
         return cls(scheme=scheme, host=host, port=port, path=path)
 
     @property
@@ -220,6 +226,7 @@ async def accept_transport(
     peer = writer.get_extra_info("peername")
     peer_text = f"{peer[0]}:{peer[1]}" if isinstance(peer, tuple) else str(peer)
 
+    transport: Transport
     if not is_websocket:
         transport = RawTCPTransport(
             reader, writer, peer=peer_text, encrypted=encrypted, max_message_size=max_message_size

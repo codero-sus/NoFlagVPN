@@ -33,13 +33,15 @@ Rekeying chains forward: ``master_{n+1} = HKDF(master_n, info = "nfvpn v1 rekey"
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import stat
 import time
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 from nfvpn.core.encoding import b64d, b64e, fingerprint, safety_number, short_id
 from nfvpn.core.primitives import (
@@ -81,6 +83,10 @@ def write_private_file(path: Path, data: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     descriptor = os.open(path, flags, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+    # os.open's mode only applies when the file is created; an existing key with
+    # looser permissions must be tightened, not silently left readable.
+    with contextlib.suppress(OSError):
+        os.fchmod(descriptor, stat.S_IRUSR | stat.S_IWUSR)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(data)

@@ -1,2 +1,172 @@
 # NoFlagVPN
-Securely routes network and is undetectable.
+
+A personal tunnel that does not look like one.
+
+NoFlagVPN carries your traffic to a relay you run yourself, inside ordinary
+WebSocket frames, with the sizes and timings of ordinary web traffic.  To a
+network that blocks VPNs by probing ports, it looks like the nginx box it is
+pretending to be; to one that blocks them by recognising tunnel-shaped packets,
+it looks like a browser talking to a CDN.
+
+It is pure Python 3.10+, standard library only, no build step, no wheels.
+
+```console
+$ nfvpn selftest
+…
+25/25 checks passed
+```
+
+## Install
+
+```bash
+git clone https://github.com/codero-sus/NoFlagVPN && cd NoFlagVPN
+python3 -m nfvpn selftest        # works immediately: no dependencies
+```
+
+Add the package to your environment to get the `nfvpn` command:
+
+```bash
+pip install -e .                 # or: pip install -e '.[fast]' for acceleration
+```
+
+`cryptography` is optional: if it is present, bulk encryption is roughly 70×
+faster.  If it is not, a pure-Python ChaCha20-Poly1305 (verified against the
+RFC 8439 vectors on every test run) does the work.
+
+## Sixty seconds to a working tunnel
+
+On the machine that will be the relay — a VPS, a home server, anything with a
+public address:
+
+```bash
+nfvpn keygen --name relay                 # prints the relay's public key
+nfvpn member add --name laptop --key <the laptop's public key> --json
+nfvpn token --member laptop --relay wss://relay.example/cdn
+```
+
+On the laptop:
+
+```bash
+nfvpn keygen --name laptop --json         # copy `public_key` back to the relay
+nfvpn connect --token 'nfvpn://…'         # a SOCKS5 + HTTP proxy on 127.0.0.1:8080
+```
+
+Point your browser (or game, or `curl`) at `socks5://127.0.0.1:8080` and you are
+done.  The token carries the address, the relay's public key and the pre-shared
+key in one string; it is a **secret** — treat it like a password.
+
+For a throwaway look at the whole thing on one machine:
+
+```bash
+nfvpn demo        # a relay, a client and a test origin, wired together
+make selftest     # ~30 end-to-end checks on loopback
+```
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| `nfvpn keygen` | Create this machine's long-term identity. |
+| `nfvpn token` | Print one string that carries everything a client needs. |
+| `nfvpn member {add,list,revoke,remove}` | Manage a relay's allowlist. |
+| `nfvpn serve` | Run the relay. |
+| `nfvpn connect` | Run the local SOCKS5/HTTP proxy. |
+| `nfvpn probe TARGET` | Look at an endpoint the way a network scanner would. |
+| `nfvpn selftest` | Run the whole stack on loopback and check every promise. |
+| `nfvpn doctor` | Check this machine's setup and traffic shape. |
+| `nfvpn demo` | Start a relay and a client locally, with a test origin. |
+| `nfvpn version` | Version, Python, crypto backend. |
+
+Useful flags:
+
+- `nfvpn serve --tls-cert cert.pem --tls-key key.pem` — serve real TLS, with
+  ALPN advertising `h2,http/1.1`.  `--disable-tls` is not a thing; use TLS in
+  production.
+- `nfvpn serve --profile paranoid` — sparser timing and more cover traffic.
+- `nfvpn serve --deny-network 10.0.0.0/8` — the private ranges are refused by
+  default; this is for adding your own.
+- `nfvpn connect --failover wss://backup.example/cdn` — try another relay when
+  the first is unreachable.
+- `nfvpn connect --proxy-auth user:pass --expose-lan` — share the proxy with
+  your LAN, with authentication (required for a non-loopback bind).
+- `nfvpn probe relay.example:443 --json` — machine-readable probe output.
+
+Exit codes: `0` success, `1` the command ran and something was wrong, `2`
+misuse or a bad configuration, `130` interrupted.
+
+## How it avoids being recognised
+
+Three things give a tunnel away, and each one has an answer here.
+
+**Probing.** A port that claims to be a website but hangs up on anything except
+one magic string is a fingerprint.  Here, a scan gets nginx's 404 page with a
+`Server: nginx` header; a malformed WebSocket upgrade gets the same page; a
+correct upgrade that sends junk gets a well-formed, fixed-size reply that
+reveals nothing, because every handshake refusal is byte-for-byte the same shape
+and takes the same time as an acceptance.
+
+**Packet sizes.** Padding inside the authenticated payload, chosen from size
+classes that are not powers of two, so that a one-byte request and a 200-byte
+request leave the same bytes on the wire — and the real length is inside the
+ciphertext where nobody can read it.  `nfvpn doctor` measures the overhead on
+your machine (about 4% on bulk transfers).
+
+**Timing and idle periods.** The `paranoid` profile adds jittered delays and
+sends cover traffic while idle, so a tunnel that is not doing anything still
+looks like something that is.  The default profile adds no latency at all,
+because a tunnel you cannot play over is a tunnel you will not use.
+
+The full story, including what this does *not* protect against, is in
+[docs/DESIGN.md](docs/DESIGN.md).
+
+## Safety
+
+- **The relay is closed by default.** It answers an empty allowlist by refusing
+  every handshake in the same way it refuses a scanner.  `nfvpn member add` is
+  what makes it a relay for someone.
+- **The relay will not dial your private network.** Loopback, RFC 1918,
+  link-local, CGNAT, multicast and the cloud metadata service (`169.254.169.254`)
+  are refused before anything is dialled, and a name that resolves to both a
+  public and a private address is refused outright.  That is what stops a relay
+  from becoming a pivot into its own host.
+- **The local proxy binds to loopback** unless you pass `--expose-lan`, which
+  requires `--proxy-auth`.
+- **Secrets stay at 0600.** Keys, membership files and configs are written
+  owner-only, and `nfvpn doctor` warns when they are not.
+- **Revocation is immediate for new sessions.** Run `nfvpn serve` under a
+  service manager to get the same for existing ones, and use `--profile
+  paranoid` on a network where you expect to be watched.
+
+What this cannot do: it cannot make using it permitted.  Evading a service's own
+detection is between you and that service's terms.
+
+## Development
+
+```bash
+make venv && make dev          # .venv with pytest, ruff, mypy, cryptography
+make check                     # lint + typecheck + tests
+make selftest                  # the end-to-end loopback suite
+python tools/gen_chacha.py --check   # the generated ChaCha kernels are in sync
+```
+
+Layout:
+
+```
+nfvpn/core       crypto: ChaCha20-Poly1305, X25519, HKDF, keys
+nfvpn/framing    the authenticated record layer
+nfvpn/traffic    shaping profiles: sizes, jitter, cover traffic
+nfvpn/transport  carriers: WebSocket, raw TCP, TLS
+nfvpn/session    handshake, encrypted channel, streams
+nfvpn/server     the relay and its egress policy
+nfvpn/client     the tunnel and the local proxy
+nfvpn/detect     probing from outside, auditing from inside
+nfvpn/cli        the command line
+```
+
+`tests/` mirrors that layout.  The crypto is checked against the RFC 8439 and
+RFC 7748 vectors, and every other test asserts a promise made in this README or
+in `docs/DESIGN.md`.
+
+## License
+
+MIT.

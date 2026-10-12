@@ -176,7 +176,7 @@ class LocalProxy:
             pass
         except asyncio.CancelledError:
             raise
-        except Exception as exc:  # noqa: BLE001 - one bad client must not stop the proxy
+        except Exception as exc:
             self.log.debug("client connection failed: %r", exc)
         finally:
             if task is not None:

@@ -17,7 +17,6 @@ import asyncio
 import contextlib
 import json
 import socket
-import sys
 import time
 from dataclasses import dataclass, field
 
@@ -34,8 +33,7 @@ from nfvpn.server.egress import EgressPolicy
 from nfvpn.server.relay import Relay
 from nfvpn.session.handshake import HANDSHAKE_SIZE, HandshakeInitiator
 from nfvpn.traffic import Shaper, get_profile
-from nfvpn.transport import accept_transport, dial, Endpoint
-from nfvpn.transport.websocket import OP_BINARY, read_frame, write_frame
+from nfvpn.transport import Endpoint, dial
 
 __all__ = ["Check", "Report", "run_selftest", "start_origin"]
 
@@ -74,7 +72,8 @@ class Report:
         return [check for check in self.checks if not check.passed]
 
     def render(self, *, verbose: bool = True) -> str:
-        lines = [check.line() for check in self.checks]
+        checks = self.checks if verbose else [check for check in self.checks if not check.passed]
+        lines = [check.line() for check in checks]
         lines.append("")
         passed = len(self.checks) - len(self.failures)
         lines.append(f"{passed}/{len(self.checks)} checks passed")
@@ -152,7 +151,7 @@ async def _socks5_connect(reader, writer, host: str, port: int) -> int:
     await writer.drain()
     greeting = await asyncio.wait_for(reader.readexactly(2), timeout=10)
     if greeting != b"\x05\x00":
-        return 0xFF
+        return 0xFF  # no acceptable method (0x00 0xFF) or a malformed greeting
     encoded = host.encode()
     writer.write(
         b"\x05\x01\x00\x03" + bytes([len(encoded)]) + encoded + port.to_bytes(2, "big")
@@ -234,7 +233,7 @@ async def run_selftest(*, verbose: bool = True, json_output: bool = False) -> in
     relay_identity = Identity.generate("selftest-relay")
     client_identity = Identity.generate("selftest-client")
     psk = parse_psk(generate_psk())
-    stranger_identity = Identity.generate("stranger")
+    Identity.generate("stranger")
 
     membership = MembershipStore()
     membership.add(Member(name="selftest-client", public_key=client_identity.public_key, psk=psk))

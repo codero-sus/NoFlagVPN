@@ -40,7 +40,7 @@ from nfvpn.framing.constants import MAX_PAYLOAD, RecordType
 from nfvpn.framing.records import FrameReader, FrameWriter, Record
 from nfvpn.traffic.shaper import Shaper
 
-__all__ = ["ChannelStats", "SecureChannel", "SendQueueFull"]
+__all__ = ["ChannelStats", "SecureChannel", "SendQueueFullError"]
 
 #: Rotate keys after this much traffic on one generation (1 GiB).
 DEFAULT_REKEY_BYTES = 1 << 30
@@ -52,7 +52,7 @@ DEFAULT_REKEY_SECONDS = 900.0
 DEFAULT_QUEUE_DEPTH = 512
 
 
-class SendQueueFull(TransportError):
+class SendQueueFullError(TransportError):
     """The carrier cannot keep up; the caller should slow down or give up."""
 
 
@@ -178,7 +178,7 @@ class SecureChannel:
         try:
             await self._queue.put(frame)
         except asyncio.QueueFull as exc:  # pragma: no cover - put() awaits instead
-            raise SendQueueFull("the send queue is full; the carrier is stalled") from exc
+            raise SendQueueFullError("the send queue is full; the carrier is stalled") from exc
         except asyncio.CancelledError:
             raise
 
@@ -282,7 +282,7 @@ class SecureChannel:
                     self._queue.task_done()
         except asyncio.CancelledError:
             raise
-        except BaseException as exc:  # noqa: BLE001 - reported to the reader loop
+        except BaseException as exc:
             self._failure = exc
             # Unblock anything waiting to send.
             with contextlib.suppress(Exception):

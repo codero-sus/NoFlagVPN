@@ -22,9 +22,9 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable
 
 __all__ = ["Decision", "EgressPolicy", "Verdict", "resolve_and_authorize"]
 

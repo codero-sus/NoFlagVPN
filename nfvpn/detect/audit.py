@@ -55,7 +55,7 @@ class Audit:
             lines.append("environment")
             width = max(len(str(key)) for key in self.facts) + 2
             for key, value in self.facts.items():
-                lines.append(f"  {str(key):<{width}}{value}")
+                lines.append(f"  {key!s:<{width}}{value}")
             lines.append("")
         lines.append("findings")
         for level, title, detail in self.findings:
@@ -90,7 +90,7 @@ def benchmark_backends(payload_size: int = 1 << 16, rounds: int = 8) -> dict:
     for name in ("pure", "cryptography"):
         try:
             primitives.use_backend(name)
-        except Exception:  # noqa: BLE001 - the accelerated backend is optional
+        except Exception:
             continue
         start = time.perf_counter()
         for _ in range(rounds):
@@ -135,7 +135,7 @@ def _policy_findings(audit: Audit, directory: Path) -> None:
     if relay_path.exists():
         try:
             server = ServerConfig.load(relay_path)
-        except Exception as exc:  # noqa: BLE001 - a broken config is a finding
+        except Exception as exc:
             audit.add("warn", "relay.json could not be read", str(exc))
         else:
             if server.egress.allow_private_literals:
@@ -166,7 +166,7 @@ def _policy_findings(audit: Audit, directory: Path) -> None:
     if client_path.exists():
         try:
             client = ClientConfig.load(client_path)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             audit.add("warn", "client.json could not be read", str(exc))
         else:
             if client.listen_host not in ("127.0.0.1", "::1", "localhost"):
@@ -247,10 +247,12 @@ def run_doctor(*, json_output: bool = False) -> int:
     audit.facts["config directory"] = str(config_dir())
     audit.facts["profiles"] = ", ".join(profile_names())
 
-    if sys.version_info < (3, 10):  # pragma: no cover - the package requires 3.10
-        audit.add("warn", "Python is older than 3.10", platform.python_version())
-    else:
-        audit.add("ok", "Python version is supported", platform.python_version())
+    supported = sys.version_info >= (3, 10)
+    audit.add(
+        "ok" if supported else "warn",
+        f"Python {platform.python_version()}",
+        "" if supported else "NoFlagVPN targets Python 3.10 or newer",
+    )
 
     timings = benchmark_backends()
     for name, value in timings.items():

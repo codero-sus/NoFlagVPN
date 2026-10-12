@@ -10,14 +10,13 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import platform
 import signal
 import socket
 import sys
 import tempfile
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from nfvpn.client.proxy import LocalAuth, LocalProxy
@@ -27,27 +26,22 @@ from nfvpn.config import (
     ServerConfig,
     config_dir,
     identity_path,
-    load_json,
-    save_json,
 )
 from nfvpn.core.encoding import b64d, b64e, fingerprint
 from nfvpn.core.keys import Identity, Member, MembershipStore, generate_psk, parse_psk
-from nfvpn.core.primitives import backend_name, use_backend
+from nfvpn.core.primitives import backend_name
 from nfvpn.detect.probe import format_report, probe_endpoint
-from nfvpn.errors import ConfigError, HandshakeError, NoFlagVPNError
-from nfvpn.framing.constants import CloseReason
+from nfvpn.errors import ConfigError, NoFlagVPNError
 from nfvpn.server.egress import EgressPolicy
 from nfvpn.server.relay import Relay
-from nfvpn.session.handshake import HandshakeInitiator
 from nfvpn.tokens import Invite, decode_invite
-from nfvpn.traffic import get_profile, profile_names
-from nfvpn.transport import Endpoint, dial
+from nfvpn.traffic import profile_names
 from nfvpn.version import __version__
 
 __all__ = [
     "cmd_connect",
-    "cmd_doctor",
     "cmd_demo",
+    "cmd_doctor",
     "cmd_keygen",
     "cmd_member",
     "cmd_probe",
@@ -156,6 +150,28 @@ def cmd_keygen(args) -> int:
     return EXIT_OK
 
 
+@dataclass(frozen=True)
+class MemberRow:
+    """One row of ``nfvpn member list``, shared by the text and JSON output."""
+
+    name: str
+    short_id: str
+    fingerprint: str
+    enabled: bool
+    expires_at: float | None
+    tags: tuple[str, ...]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "short_id": self.short_id,
+            "fingerprint": self.fingerprint,
+            "enabled": self.enabled,
+            "expires_at": self.expires_at,
+            "tags": list(self.tags),
+        }
+
+
 def _load_membership(args) -> MembershipStore:
     config_path = Path(args.config).expanduser() if args.config else None
     path = config_path or (config_dir() / "members.json")
@@ -167,31 +183,31 @@ def cmd_member(args) -> int:
     store = _load_membership(args)
 
     if args.member_command == "list":
-        rows = [
-            {
-                "name": member.name,
-                "short_id": member.short_id,
-                "fingerprint": member.fingerprint,
-                "enabled": member.enabled,
-                "expires_at": member.expires_at,
-                "tags": member.tags,
-            }
+        rows: list[MemberRow] = [
+            MemberRow(
+                name=member.name,
+                short_id=member.short_id,
+                fingerprint=member.fingerprint,
+                enabled=member.enabled,
+                expires_at=member.expires_at,
+                tags=tuple(member.tags),
+            )
             for member in store
         ]
         if args.json:
-            _as_json({"members": rows, "file": str(store.path)})
+            _as_json({"members": [row.as_dict() for row in rows], "file": str(store.path)})
             return EXIT_OK
         if not rows:
             _print(f"no members in {store.path} — every handshake will be refused")
             return EXIT_OK
         for row in rows:
-            state = "enabled" if row["enabled"] else "revoked"
+            state = "enabled" if row.enabled else "revoked"
             expiry = (
-                time.strftime("%Y-%m-%d", time.localtime(row["expires_at"]))
-                if row["expires_at"]
+                time.strftime("%Y-%m-%d", time.localtime(row.expires_at))
+                if row.expires_at
                 else "never"
             )
-            _print(f"{row['name']:<20} {row['short_id']:<10} {state:<8} expires {expiry}")
+            _print(f"{row.name:<20} {row.short_id:<10} {state:<8} expires {expiry}")
         return EXIT_OK
 
     if args.member_command == "add":
@@ -409,15 +425,13 @@ def cmd_serve(args) -> int:
         def on_stop() -> None:
             stopping.set()
 
-        try:
+        # Not every event loop implements signal handlers (and Windows never
+        # does); losing them degrades Ctrl+C, it does not break the daemon.
+        with contextlib.suppress(NotImplementedError, AttributeError, ValueError):
             loop.add_signal_handler(signal.SIGHUP, on_reload)
-        except (NotImplementedError, AttributeError, ValueError):  # pragma: no cover
-            pass
-        try:
+        with contextlib.suppress(NotImplementedError, AttributeError, ValueError):
             for sig in (signal.SIGINT, signal.SIGTERM):
                 loop.add_signal_handler(sig, on_stop)
-        except (NotImplementedError, AttributeError, ValueError):  # pragma: no cover
-            pass
 
         await stopping.wait()
         await relay.stop()
@@ -453,6 +467,8 @@ def _apply_client_overrides(config: ClientConfig, args) -> ClientConfig:
         changes["identity_file"] = args.identity_file
     if getattr(args, "peer_name", None):
         changes["peer_name"] = args.peer_name
+    if getattr(args, "failover", None):
+        changes["failover"] = tuple(args.failover)
     if getattr(args, "encoding", None):
         changes["encoding"] = args.encoding
     if getattr(args, "log_level", None):
@@ -524,7 +540,7 @@ def cmd_connect(args) -> int:
                 config.listen_host,
             )
         _print("")
-        _print(f"  NoFlagVPN is up.  Point your browser or game at:")
+        _print("  NoFlagVPN is up.  Point your browser or game at:")
         for address in bound:
             _print(f"      SOCKS5 / HTTP proxy   {address}")
         _print("")
@@ -534,6 +550,7 @@ def cmd_connect(args) -> int:
 
         loop = asyncio.get_running_loop()
         stopping = asyncio.Event()
+        background: list[asyncio.Task] = []
 
         def on_stop() -> None:
             stopping.set()
@@ -545,9 +562,12 @@ def cmd_connect(args) -> int:
                     await asyncio.sleep(args.stats_interval)
                     log.info("tunnel: %s", tunnel.describe())
 
-            asyncio.create_task(stats_loop())
+            # Runs until shutdown; the reference is kept so it is not collected.
+            background.append(asyncio.create_task(stats_loop()))
 
         await stopping.wait()
+        for task in background:
+            task.cancel()
         log.info("shutting down: %s", tunnel.stats.summary())
         await proxy.stop()
         await tunnel.close()
@@ -658,7 +678,7 @@ def cmd_demo(args) -> int:
         _print(f"    curl --socks5-hostname 127.0.0.1:{args.proxy_port} {origin_url}")
         _print(f"    curl --proxy http://127.0.0.1:{args.proxy_port} {origin_url}")
         _print("")
-        _print("  Set your browser's SOCKS5 proxy to 127.0.0.1:%d and load a game." % args.proxy_port)
+        _print(f"  Set your browser's SOCKS5 proxy to 127.0.0.1:{args.proxy_port} and load a game.")
         _print("  Press Ctrl+C to stop.")
         _print("")
 
