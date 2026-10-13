@@ -117,6 +117,19 @@ Useful flags:
 Exit codes: `0` success, `1` the command ran and something was wrong, `2`
 misuse or a bad configuration, `130` interrupted.
 
+## Routing your traffic
+
+The client is a SOCKS5 + HTTP CONNECT proxy on `127.0.0.1:8080` and the relay
+dials the destination - there is no virtual network interface anywhere in this
+design. So routing means getting your applications to use that proxy: one
+browser (best DNS privacy), the system proxy setting (covers browsers and
+Electron apps), a transparent redirector (covers every TCP app, needs root and
+gives up remote DNS), or sharing it with your other devices. UDP cannot ride
+this tunnel, and neither can ICMP.
+
+[docs/ROUTING.md](docs/ROUTING.md) has the recipes, the load-bearing firewall
+exclusions, and the honest limits.
+
 ## How it avoids being recognised
 
 Three things give a tunnel away, and each one has an answer here.
