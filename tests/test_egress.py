@@ -12,6 +12,7 @@ import ipaddress
 import socket
 
 import pytest
+from nfvpn.errors import ConfigError
 from nfvpn.server.egress import (
     DEFAULT_DENIED_NETWORKS,
     DEFAULT_DENIED_PORTS,
@@ -197,7 +198,9 @@ async def test_a_public_name_resolves_to_a_fixed_address_set():
 
 def test_networks_from_text_parses_and_refuses_junk():
     assert networks_from_text(["10.0.0.0/8", "192.168.0.0/24"]) == ("10.0.0.0/8", "192.168.0.0/24")
-    with pytest.raises(ValueError):
+    # ConfigError, not the bare ValueError ipaddress raised: the CLI turns this
+    # into one clean line instead of a traceback.
+    with pytest.raises(ConfigError, match="not an IPv4 or IPv6 network"):
         networks_from_text(["not-a-network"])
 
 

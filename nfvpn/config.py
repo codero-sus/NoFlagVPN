@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -28,9 +30,32 @@ from nfvpn.server.egress import EgressPolicy
 from nfvpn.traffic.shaper import DEFAULT_PROFILE, profile_names
 from nfvpn.transport.websocket import PayloadEncoding
 
+
+def check_numbers(
+    config: Any, *, positive: Iterable[str], non_negative: Iterable[str] = ()
+) -> None:
+    """Numeric fields must be sane.  Shared by both configs.
+
+    A zero or negative window is not a smaller tunnel, it is a hang: the sender
+    waits for credit that can never be granted.  An interval of zero means "off"
+    for the fields where that is documented, and nothing at all where it is not.
+    Better to refuse the value at the door than to debug it at three in the
+    morning.
+    """
+    for name in positive:
+        value = getattr(config, name)
+        if value <= 0:
+            raise ConfigError(f"{name} must be greater than zero, not {value:g}")
+    for name in non_negative:
+        value = getattr(config, name)
+        if value < 0:
+            raise ConfigError(f"{name} cannot be negative, got {value:g}")
+
+
 __all__ = [
     "ClientConfig",
     "ServerConfig",
+    "check_identity_name",
     "config_dir",
     "default_membership_path",
     "identity_path",
@@ -54,8 +79,30 @@ def config_dir() -> Path:
     return base_path / DEFAULT_CONFIG_DIR_NAME
 
 
+#: Identity file names: one component of a file name, nothing more.  A name
+#: such as ``../../etc/passwd`` would otherwise write a key outside the config
+#: directory, which is a surprise nobody wants from ``nfvpn keygen --name``.
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_NAME_LENGTH = 64
+
+
+def check_identity_name(name: str) -> str:
+    """Return ``name`` if it is usable as an identity file name, else raise.
+
+    Deliberately strict: letters, digits, dot, dash and underscore, starting
+    with a letter or digit.  ``.`` and ``..`` fall out of that rule, so a name
+    can never escape the config directory or resolve to a directory.
+    """
+    if not _NAME_RE.match(name):
+        raise ConfigError(
+            f"invalid name {name!r}: use letters, digits, dot, dash or underscore "
+            f"(up to {_NAME_LENGTH} characters, starting with a letter or digit)"
+        )
+    return name
+
+
 def identity_path(name: str = "identity") -> Path:
-    return config_dir() / f"{name}.key"
+    return config_dir() / f"{check_identity_name(name)}.key"
 
 
 def default_membership_path() -> Path:
@@ -148,6 +195,23 @@ class ServerConfig:
             raise ConfigError("tls_cert and tls_key must be set together")
         if not 1 <= self.listen_port <= 65535:
             raise ConfigError(f"listen_port {self.listen_port} is out of range")
+        check_numbers(
+            self,
+            positive=(
+                "max_streams",
+                "window",
+                "rekey_seconds",
+                "idle_timeout",
+                "handshake_timeout",
+                "connect_timeout",
+            ),
+            non_negative=("stats_interval",),
+        )
+        if self.limit_mbps is not None and self.limit_mbps <= 0:
+            raise ConfigError(
+                f"limit_mbps must be greater than zero or left out entirely (meaning no "
+                f"limit), not {self.limit_mbps:g}"
+            )
 
     def cover_body(self) -> bytes:
         """The bytes served for non-upgrade requests (defaults to nginx's 404)."""
@@ -271,6 +335,7 @@ class ClientConfig:
             raise ConfigError(f"unknown encoding {self.encoding!r}")
         if not 1 <= self.listen_port <= 65535:
             raise ConfigError(f"listen_port {self.listen_port} is out of range")
+        check_numbers(self, positive=("max_streams", "window"))
         if self.insecure_tls and self.ca_file:
             raise ConfigError("insecure_tls and ca_file are mutually exclusive")
 

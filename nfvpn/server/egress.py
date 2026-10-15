@@ -26,6 +26,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 
+from nfvpn.errors import ConfigError
+
 __all__ = ["Decision", "EgressPolicy", "Verdict", "resolve_and_authorize"]
 
 
@@ -120,12 +122,18 @@ class EgressPolicy:
 
     def __post_init__(self) -> None:
         self._allow_nets = tuple(
-            ipaddress.ip_network(item, strict=False) for item in self.allow_networks
+            _network(item, "allow_networks") for item in self.allow_networks
         )
         deny_specs = list(self.deny_networks)
         if self.block_private and not self.allow_private_literals:
             deny_specs = list(DEFAULT_DENIED_NETWORKS) + deny_specs
-        self._deny_nets = tuple(ipaddress.ip_network(item, strict=False) for item in deny_specs)
+        self._deny_nets = tuple(_network(item, "deny_networks") for item in deny_specs)
+
+        for port in (*self.allow_ports, *self.deny_ports):
+            if not 1 <= int(port) <= 65535:
+                raise ConfigError(
+                    f"{port} is not a valid TCP port; ports run from 1 to 65535"
+                )
 
     # -- individual checks -------------------------------------------------
     def port_allowed(self, port: int) -> tuple[bool, str]:
@@ -260,6 +268,17 @@ async def resolve_and_authorize(
     )
 
 
+def _network(item: str, field_name: str) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
+    """One CIDR string as a network object, with a message worth reading."""
+    try:
+        return ipaddress.ip_network(item, strict=False)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{field_name}: {item!r} is not an IPv4 or IPv6 network "
+            "(write it like 10.0.0.0/8, 192.168.1.0/24 or ::1/128)"
+        ) from exc
+
+
 def networks_from_text(items: Iterable[str]) -> tuple[str, ...]:
     """Normalise a list of CIDR strings, raising on nonsense early."""
-    return tuple(str(ipaddress.ip_network(item, strict=False)) for item in items)
+    return tuple(str(_network(item, "network")) for item in items)

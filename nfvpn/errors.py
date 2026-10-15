@@ -9,6 +9,7 @@ from __future__ import annotations
 __all__ = [
     "AuthenticationError",
     "ConfigError",
+    "EncodingError",
     "HandshakeError",
     "NoFlagVPNError",
     "PeerError",
@@ -24,6 +25,14 @@ class NoFlagVPNError(Exception):
 
 class ConfigError(NoFlagVPNError):
     """The configuration file, key material or CLI arguments are unusable."""
+
+
+class EncodingError(NoFlagVPNError, ValueError):
+    """Text that should have been a key, token or blob was not decodable.
+
+    Also a :class:`ValueError`, because that is what a caller parsing a string
+    would reach for, and this must not break the exception they catch.
+    """
 
 
 class TransportError(NoFlagVPNError):

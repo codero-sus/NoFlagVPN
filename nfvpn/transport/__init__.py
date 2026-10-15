@@ -52,6 +52,22 @@ _WEBSOCKET_SCHEMES = {"ws", "wss"}
 _TLS_SCHEMES = {"wss", "tls"}
 
 
+def _port_or_default(port_text: str, scheme: str, original: str) -> int:
+    """Turn the text after the colon into a port, or fail with something useful.
+
+    ``int()`` raising is a bug report about Python, not about the endpoint the
+    user typed, so the message names what was actually written.
+    """
+    if not port_text:
+        return _DEFAULT_PORTS[scheme]
+    if not port_text.isdigit():
+        raise ConfigError(
+            f"endpoint {original!r} has a non-numeric port {port_text!r}; "
+            "expected something like wss://relay.example:443/cdn"
+        )
+    return int(port_text)
+
+
 @dataclass(frozen=True)
 class Endpoint:
     """A carrier address."""
@@ -96,13 +112,13 @@ class Endpoint:
         if rest.startswith("["):  # bracketed IPv6 literal
             host, _, tail = rest[1:].partition("]")
             rest = f"{host}{tail}"
-            port = int(tail[1:]) if tail.startswith(":") and tail[1:] else _DEFAULT_PORTS[scheme]
+            port = _port_or_default(tail[1:] if tail.startswith(":") else "", scheme, text)
         else:
             if ":" in rest:
                 host, _, port_text = rest.rpartition(":")
             else:
                 host, port_text = rest, ""
-            port = int(port_text) if port_text else _DEFAULT_PORTS[scheme]
+            port = _port_or_default(port_text, scheme, text)
 
         if not host:
             raise ConfigError(f"endpoint {text!r} has no host")
