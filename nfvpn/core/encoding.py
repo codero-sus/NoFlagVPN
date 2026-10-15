@@ -5,6 +5,8 @@ from __future__ import annotations
 import base64
 import binascii
 
+from nfvpn.errors import EncodingError
+
 __all__ = ["b64d", "b64e", "fingerprint", "group_hex", "safety_number", "short_id"]
 
 _ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"  # Crockford-ish, no I/L/O/U
@@ -22,7 +24,9 @@ def b64d(text: str) -> bytes:
     try:
         return base64.urlsafe_b64decode(cleaned + padding)
     except (binascii.Error, ValueError) as exc:
-        raise ValueError(f"not valid base64url: {text[:16]}…") from exc
+        raise EncodingError(
+            f"not valid base64url: {text[:16]}… — check for a truncated copy/paste"
+        ) from exc
 
 
 def group_hex(raw: bytes, group: int = 4) -> str:

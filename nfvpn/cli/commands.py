@@ -24,6 +24,7 @@ from nfvpn.client.tunnel import Tunnel
 from nfvpn.config import (
     ClientConfig,
     ServerConfig,
+    check_identity_name,
     config_dir,
     identity_path,
 )
@@ -31,7 +32,7 @@ from nfvpn.core.encoding import b64d, b64e, fingerprint
 from nfvpn.core.keys import Identity, Member, MembershipStore, generate_psk, parse_psk
 from nfvpn.core.primitives import backend_name
 from nfvpn.detect.probe import format_report, probe_endpoint
-from nfvpn.errors import AuthenticationError, ConfigError, NoFlagVPNError
+from nfvpn.errors import AuthenticationError, ConfigError, EncodingError, NoFlagVPNError
 from nfvpn.server.egress import EgressPolicy
 from nfvpn.server.relay import Relay
 from nfvpn.tokens import Invite, decode_invite
@@ -126,8 +127,19 @@ def cmd_keygen(args) -> int:
     passed to the command that uses the key — ``nfvpn connect`` says so when the
     handshake is refused.
     """
+    if args.name is not None:
+        check_identity_name(args.name)
     target = Path(args.out).expanduser() if args.out else identity_path(args.name or "identity")
     if target.exists() and not args.force:
+        if args.name is None and not args.out:
+            raise ConfigError(
+                f"{target} already exists.\n"
+                "Give the key a name so it is obvious what it is for - the two that "
+                "matter are `--name relay` (what `nfvpn serve` loads) and "
+                "`--name client` (what `nfvpn connect` loads):\n"
+                "    nfvpn keygen --name relay\n"
+                "Or overwrite this one with --force."
+            )
         raise ConfigError(f"{target} already exists (use --force to overwrite)")
 
     name = args.name or socket.gethostname().split(".")[0] or "nfvpn"
@@ -185,6 +197,38 @@ def _load_membership(args) -> MembershipStore:
     return MembershipStore.load(path)
 
 
+def _public_key(text: str) -> bytes:
+    """Decode a public key given on the command line.
+
+    ``b64d`` raises an :class:`EncodingError`, which is accurate but not
+    actionable; this says what was being decoded and where good input comes
+    from.  The length is checked downstream by ``Member``.
+    """
+    try:
+        return b64d(text)
+    except EncodingError as exc:
+        raise ConfigError(
+            f"that is not a public key: {exc}.  Copy one from `nfvpn keygen --json` "
+            "or from an invite token."
+        ) from exc
+
+
+def _parse_tags(items) -> dict[str, str]:
+    """Turn repeated ``--tag KEY=VALUE`` into a mapping, refusing anything else.
+
+    ``dict(["--tag noequals"])`` used to raise a tuple-unpacking error from deep
+    inside Python; a tag that is not ``KEY=VALUE`` is a typo, not a mystery.
+    """
+    tags: dict[str, str] = {}
+    for item in items or ():
+        key, separator, value = str(item).partition("=")
+        key = key.strip()
+        if not separator or not key:
+            raise ConfigError(f"--tag wants KEY=VALUE, and {item!r} has no '='")
+        tags[key] = value
+    return tags
+
+
 def cmd_member(args) -> int:
     """Add, list, revoke or remove members of a relay's allowlist."""
     store = _load_membership(args)
@@ -228,7 +272,7 @@ def cmd_member(args) -> int:
         else:
             if not args.key:
                 raise ConfigError("member add needs --key (the client's public key) or --token")
-            public_key = b64d(args.key)
+            public_key = _public_key(args.key)
             psk = parse_psk(args.psk) if args.psk else None  # type: ignore[assignment]
             name = args.name or "peer"
         generated = psk is None
@@ -240,7 +284,7 @@ def cmd_member(args) -> int:
             public_key=public_key,
             psk=psk,
             expires_at=expires_at,
-            tags=dict(args.tag or []),
+            tags=_parse_tags(args.tag),
         )
         # A name means "that machine".  Re-adding it with a different key is a
         # re-install, not a second laptop, so the old entry must not linger —
@@ -278,7 +322,7 @@ def cmd_member(args) -> int:
     if args.member_command in ("revoke", "remove"):
         keys: list[bytes] = []
         if args.key:
-            keys.append(b64d(args.key))
+            keys.append(_public_key(args.key))
         if args.name:
             # Revoke every member answering to that name: if duplicates exist,
             # leaving one enabled is the failure mode that matters.
@@ -384,15 +428,18 @@ def _apply_server_overrides(config: ServerConfig, args) -> ServerConfig:
         changes["server_header"] = args.server_header or None
     if getattr(args, "cover_page", None):
         changes["cover_page"] = args.cover_page
-    if getattr(args, "max_streams", None):
+    # `is not None`, not truthiness: an explicit 0 is a value somebody typed and
+    # it must reach validation, which refuses it with a sentence.  Treating it as
+    # "not given" started a relay with a meaningless setting and no warning.
+    if getattr(args, "max_streams", None) is not None:
         changes["max_streams"] = args.max_streams
-    if getattr(args, "idle_timeout", None):
+    if getattr(args, "idle_timeout", None) is not None:
         changes["idle_timeout"] = args.idle_timeout
 
     egress_changes: dict = {}
-    if getattr(args, "allow_port", None):
+    if getattr(args, "allow_port", None) is not None:
         egress_changes["allow_ports"] = tuple(args.allow_port)
-    if getattr(args, "deny_port", None):
+    if getattr(args, "deny_port", None) is not None:
         egress_changes["deny_ports"] = tuple(args.deny_port)
     if getattr(args, "allow_network", None):
         egress_changes["allow_networks"] = tuple(args.allow_network)
@@ -481,7 +528,7 @@ def _apply_client_overrides(config: ClientConfig, args) -> ClientConfig:
         changes["profile"] = args.profile
     if getattr(args, "no_cover", False):
         changes["cover_traffic"] = False
-    if getattr(args, "max_streams", None):
+    if getattr(args, "max_streams", None) is not None:
         changes["max_streams"] = args.max_streams
     if getattr(args, "insecure_tls", False):
         changes["insecure_tls"] = True
@@ -592,7 +639,7 @@ def cmd_connect(args) -> int:
             stopping.set()
 
         _install_signals(loop, on_stop=on_stop)
-        if getattr(args, "stats_interval", 0):
+        if getattr(args, "stats_interval", 0) is not None and args.stats_interval > 0:
             async def stats_loop() -> None:
                 while not stopping.is_set():
                     await asyncio.sleep(args.stats_interval)

@@ -63,7 +63,16 @@ class ReplayWindow:
             return
 
         if counter > self._highest:
-            self._bits = (self._bits << (counter - self._highest)) | 1
+            gap = counter - self._highest
+            if gap >= self._size:
+                # Jumping further than the window forgets everything: the older
+                # bits describe counters that are now outside it, so they carry
+                # no information.  Shifting would try to allocate ``gap`` bits -
+                # one record with counter 10**12 is 125 GB of shift, which is a
+                # MemoryError an authenticated peer could trigger on purpose.
+                self._bits = 1
+            else:
+                self._bits = (self._bits << gap) | 1
             self._highest = counter
             self._trim()
             return
