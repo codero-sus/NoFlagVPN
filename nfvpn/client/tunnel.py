@@ -114,11 +114,22 @@ class Tunnel:
                 order.insert(0, self._preferred)
 
             last_error: BaseException | None = None
+            refused: HandshakeError | None = None
             for index in order:
                 endpoint = self._endpoints[index]
                 try:
                     self._session = await self._establish(endpoint)
-                except (TransportError, HandshakeError, OSError, asyncio.TimeoutError) as exc:
+                except HandshakeError as exc:
+                    # "Something answered and refused us" is a different problem
+                    # from "nothing answered", and the difference is the whole
+                    # diagnosis: a refusal means the key or the identity is
+                    # wrong, and that is what the caller must be told.  Wrapping
+                    # it in a generic transport error loses the actionable half.
+                    refused = refused or exc
+                    last_error = exc
+                    self.stats.failures += 1
+                    continue
+                except (TransportError, OSError, asyncio.TimeoutError) as exc:
                     last_error = exc
                     self.stats.failures += 1
                     continue
@@ -130,6 +141,10 @@ class Tunnel:
                 self.stats.active_endpoint = endpoint.url()
                 return session
 
+            if refused is not None:
+                # Every endpoint either refused us or was unreachable; report the
+                # refusal, because it is the one that says what to fix.
+                raise refused
             raise TransportError(
                 f"could not reach any relay ({len(self._endpoints)} tried): {last_error}"
             )

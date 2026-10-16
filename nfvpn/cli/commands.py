@@ -32,7 +32,13 @@ from nfvpn.core.encoding import b64d, b64e, fingerprint
 from nfvpn.core.keys import Identity, Member, MembershipStore, generate_psk, parse_psk
 from nfvpn.core.primitives import backend_name
 from nfvpn.detect.probe import format_report, probe_endpoint
-from nfvpn.errors import AuthenticationError, ConfigError, EncodingError, NoFlagVPNError
+from nfvpn.errors import (
+    AuthenticationError,
+    ConfigError,
+    EncodingError,
+    HandshakeError,
+    NoFlagVPNError,
+)
 from nfvpn.server.egress import EgressPolicy
 from nfvpn.server.relay import Relay
 from nfvpn.tokens import Invite, decode_invite
@@ -599,9 +605,12 @@ def cmd_connect(args) -> int:
         log.info("connecting to %s", config.relay)
         try:
             await tunnel.connect()
-        except AuthenticationError as exc:
+        except (AuthenticationError, HandshakeError) as exc:
             # The most likely cause by far is a key the relay has never seen, so
-            # say so and print the exact command that fixes it.
+            # say so and print the exact command that fixes it.  Both types land
+            # here: a relay that refuses the handshake is answered with a decoy,
+            # and the client notices the MAC, so the failure arrives as a
+            # HandshakeError rather than an AuthenticationError.
             log.error("the relay refused this identity: %s", exc)
             log.error(
                 "on the relay, authorize this machine with:\n"
