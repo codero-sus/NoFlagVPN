@@ -143,7 +143,14 @@ class Stream:
     _closed: bool = False
     _eof_seen: bool = False
     _consumed_since_ack: int = 0
-    _ack_threshold: int = DEFAULT_WINDOW // 2
+    _ack_threshold: int = field(default=0, repr=False)
+    """How much the application must drain before we return credit.
+
+    Derived from this stream's own window, not the class default.  A stream with
+    a window of 16 KiB whose acknowledgements waited for half of the *default*
+    256 KiB would never send one: the sender would go quiet after 16 KiB and
+    both ends would wait for each other forever.
+    """
     _mux: StreamMultiplexer | None = field(default=None, repr=False)
     _open_future: asyncio.Future | None = field(default=None, repr=False)
     close_reason: CloseReason | None = None
@@ -152,6 +159,7 @@ class Stream:
 
     def __post_init__(self) -> None:
         self._credits = self.window
+        self._ack_threshold = max(1, self.window // 2)
         self._credit_event.set()
 
     # -- application API ---------------------------------------------------
