@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import ipaddress
 import logging
 from dataclasses import dataclass
 
@@ -272,8 +273,9 @@ class LocalProxy:
         if address_type == _ATYP_IPV4:
             return ".".join(str(byte) for byte in await reader.readexactly(4))
         if address_type == _ATYP_IPV6:
-            raw = await reader.readexactly(16)
-            return ":".join(f"{int.from_bytes(raw[i:i + 2], 'big'):x}" for i in range(0, 16, 2))
+            # Compressed form ("2001:db8::1"), which is what the relay, the
+            # egress policy and any log line will show anyway.
+            return str(ipaddress.IPv6Address(await reader.readexactly(16)))
         length = (await reader.readexactly(1))[0]
         return (await reader.readexactly(length)).decode("utf-8", "replace")
 
