@@ -109,6 +109,28 @@ def default_membership_path() -> Path:
     return config_dir() / "members.json"
 
 
+def config_file(name: str, explicit: os.PathLike[str] | str | None = None) -> Path:
+    """Find a settings file: the one the user named, or the config dir's default.
+
+    ``nfvpn serve`` and ``nfvpn connect`` take ``--config``, but the layout this
+    module documents is ``~/.config/nfvpn/relay.json`` and ``client.json``, and
+    ``nfvpn doctor`` reads exactly those.  Requiring ``--config`` for them meant
+    a user who wrote the documented file got a daemon running on defaults with
+    nothing said about it.
+
+    A path the user typed that does not exist is an error rather than a silent
+    fallback to defaults: starting a relay with the wrong egress policy because
+    of a typo in a file name is precisely the kind of surprise this project
+    should not have.
+    """
+    if explicit:
+        path = Path(explicit).expanduser()
+        if not path.exists():
+            raise ConfigError(f"no such config file: {path}")
+        return path
+    return config_dir() / name
+
+
 def load_json(path: os.PathLike[str] | str) -> dict[str, Any]:
     """Read a JSON object, with a clear error when it is not one."""
     file_path = Path(path)
@@ -191,6 +213,12 @@ class ServerConfig:
             )
         if not self.ws_path.startswith("/"):
             raise ConfigError("ws_path must start with '/'")
+        if not isinstance(self.egress, EgressPolicy):
+            # Without this, a bad egress only explodes later inside asdict()
+            # with a dataclasses TypeError, far from whoever set it.
+            raise ConfigError(
+                f"egress must be an EgressPolicy, not {type(self.egress).__name__}"
+            )
         if bool(self.tls_cert) != bool(self.tls_key):
             raise ConfigError("tls_cert and tls_key must be set together")
         if not 1 <= self.listen_port <= 65535:
