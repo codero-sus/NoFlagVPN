@@ -711,3 +711,112 @@ async def test_a_server_side_transport_without_an_upgrade_refuses():
     async with Pipe(server_side=True) as pipe:
         with pytest.raises(TransportError, match="no WebSocket upgrade"):
             await pipe.transport.open()
+
+
+# --------------------------------------------------------------------------- #
+# the raw carrier, which is the same contract with four bytes of framing
+# --------------------------------------------------------------------------- #
+from nfvpn.transport.raw import RawTCPTransport  # noqa: E402
+
+
+class RawPipe:
+    """A RawTCPTransport on a real socket pair, with the peer under our control."""
+
+    def __init__(self, *, max_size: int = 1 << 20) -> None:
+        self.transport: RawTCPTransport | None = None
+        self.server: asyncio.AbstractServer | None = None
+        self.peer_reader: asyncio.StreamReader | None = None
+        self.peer_writer: asyncio.StreamWriter | None = None
+        self.ready = asyncio.Event()
+        self.max_size = max_size
+
+    async def __aenter__(self):
+        self.server = await asyncio.start_server(self._accept, "127.0.0.1", 0)
+        port = int(self.server.sockets[0].getsockname()[1])
+        self.peer_reader, self.peer_writer = await asyncio.open_connection("127.0.0.1", port)
+        await asyncio.wait_for(self.ready.wait(), timeout=5)
+        return self
+
+    async def _accept(self, reader, writer):
+        self.transport = RawTCPTransport(
+            reader, writer, peer="127.0.0.1:0", max_message_size=self.max_size
+        )
+        await self.transport.open()
+        self.ready.set()
+        await asyncio.sleep(10)
+
+    async def __aexit__(self, *exc):
+        with contextlib.suppress(Exception):
+            if self.peer_writer is not None:
+                self.peer_writer.close()
+        if self.server is not None:
+            self.server.close()
+            with contextlib.suppress(Exception):
+                await self.server.wait_closed()
+
+
+async def test_raw_framing_is_a_four_byte_length_and_the_bytes():
+    async with RawPipe() as pipe:
+        await pipe.transport.send_message(b"hello raw")
+        assert await asyncio.wait_for(pipe.peer_reader.readexactly(13), timeout=5) == (
+            b"\x00\x00\x00\x09hello raw"
+        )
+        assert pipe.transport.bytes_sent == 9, "the counter is the payload, not the header"
+
+
+async def test_raw_framing_decodes_and_handles_empty_messages():
+    async with RawPipe() as pipe:
+        pipe.peer_writer.write(struct.pack(">I", 0))
+        pipe.peer_writer.write(struct.pack(">I", 4) + b"data")
+        await pipe.peer_writer.drain()
+        assert await asyncio.wait_for(pipe.transport.receive_message(), timeout=5) == b""
+        assert await asyncio.wait_for(pipe.transport.receive_message(), timeout=5) == b"data"
+
+
+async def test_a_truncated_length_prefix_is_a_closed_carrier():
+    async with RawPipe() as pipe:
+        pipe.peer_writer.write(b"\x00\x00")
+        pipe.peer_writer.close()
+        with pytest.raises(TransportError, match="carrier closed"):
+            await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
+
+
+async def test_a_message_that_stops_mid_way_is_a_closed_carrier():
+    async with RawPipe() as pipe:
+        pipe.peer_writer.write(struct.pack(">I", 100) + b"only-a-few")
+        await pipe.peer_writer.drain()
+        pipe.peer_writer.close()
+        with pytest.raises(TransportError, match="mid-message"):
+            await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
+
+
+async def test_a_peer_that_announces_gigabytes_is_refused_before_allocating():
+    async with RawPipe(max_size=4096) as pipe:
+        pipe.peer_writer.write(struct.pack(">I", 1 << 30))
+        await pipe.peer_writer.drain()
+        with pytest.raises(TransportError, match="oversized message"):
+            await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
+
+
+async def test_sending_past_the_limit_is_refused_client_side():
+    async with RawPipe(max_size=64) as pipe:
+        with pytest.raises(TransportError, match="carrier limit"):
+            await pipe.transport.send_message(b"x" * 65)
+        await pipe.transport.send_message(b"x" * 64)
+
+
+async def test_raw_close_is_idempotent_and_sending_afterwards_is_refused():
+    async with RawPipe() as pipe:
+        await pipe.transport.close()
+        await pipe.transport.close()
+        with pytest.raises(TransportError, match="carrier is closed"):
+            await pipe.transport.send_message(b"nope")
+        with pytest.raises(TransportError, match="carrier is closed"):
+            await pipe.transport.receive_message()
+
+
+async def test_raw_info_describes_the_carrier():
+    async with RawPipe() as pipe:
+        assert pipe.transport.info.kind == "raw"
+        assert pipe.transport.info.encrypted is False
+        assert pipe.transport.info.detail == "length-prefixed"
