@@ -26,6 +26,7 @@ from nfvpn.config import (
     ServerConfig,
     check_identity_name,
     config_dir,
+    config_file,
     identity_path,
 )
 from nfvpn.core.encoding import b64d, b64e, fingerprint
@@ -89,8 +90,13 @@ def parse_bind(text: str, default_port: int) -> tuple[str, int]:
         return "0.0.0.0", int(value[1:] or default_port)
     host, separator, port_text = value.rpartition(":")
     if separator and port_text.isdigit():
-        return host or "0.0.0.0", int(port_text)
-    return value or "0.0.0.0", default_port
+        return _wildcard(host), int(port_text)
+    return _wildcard(value), default_port
+
+
+def _wildcard(host: str) -> str:
+    """``""`` and ``*`` both mean "every interface"; neither is a hostname."""
+    return "0.0.0.0" if host in ("", "*") else host
 
 
 def _is_loopback(host: str) -> bool:
@@ -185,6 +191,12 @@ class MemberRow:
     enabled: bool
     expires_at: float | None
     tags: tuple[str, ...]
+    """``key=value`` pairs, in the order the operator typed them.
+
+    The member's own ``tags`` are a mapping; flattening it to bare keys here used
+    to throw the values away, so a relay tagged ``--tag owner=sam`` listed
+    "owner" and nothing else.
+    """
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -247,7 +259,7 @@ def cmd_member(args) -> int:
                 fingerprint=member.fingerprint,
                 enabled=member.enabled,
                 expires_at=member.expires_at,
-                tags=tuple(member.tags),
+                tags=tuple(f"{key}={value}" for key, value in member.tags.items()),
             )
             for member in store
         ]
@@ -264,7 +276,10 @@ def cmd_member(args) -> int:
                 if row.expires_at
                 else "never"
             )
-            _print(f"{row.name:<20} {row.short_id:<10} {state:<8} expires {expiry}")
+            line = f"{row.name:<20} {row.short_id:<10} {state:<8} expires {expiry}"
+            if row.tags:
+                line += "   " + " ".join(row.tags)
+            _print(line)
         return EXIT_OK
 
     if args.member_command == "add":
@@ -284,6 +299,13 @@ def cmd_member(args) -> int:
         generated = psk is None
         if generated:
             psk = b64d(generate_psk())
+        # `--expires -1` used to add a member that was already expired and say
+        # "added"; a lifetime that is not positive is a typo, not a policy.
+        if args.expires is not None and args.expires <= 0:
+            raise ConfigError(
+                "--expires wants a positive number of days (leave it out for a member "
+                "that never expires)"
+            )
         expires_at = time.time() + args.expires * 86400 if args.expires else None
         member = Member(
             name=name,
@@ -355,11 +377,10 @@ def cmd_member(args) -> int:
 
 def cmd_token(args) -> int:
     """Produce one string containing everything a client needs."""
-    server_config_path = Path(args.config).expanduser() if args.config else None
     if args.relay and args.key and args.psk:
         invite = Invite(relay=args.relay, peer_public_key=args.key, psk=args.psk, name=args.name)
     else:
-        config = ServerConfig.load(server_config_path) if server_config_path else ServerConfig()
+        config = ServerConfig.load(config_file("relay.json", args.config))
         identity = Identity.load(Path(args.identity_file or config.identity_file).expanduser())
         if not args.member:
             raise ConfigError(
@@ -463,7 +484,7 @@ def _apply_server_overrides(config: ServerConfig, args) -> ServerConfig:
 
 def cmd_serve(args) -> int:
     """Run the relay."""
-    config = ServerConfig.load(Path(args.config).expanduser()) if args.config else ServerConfig()
+    config = ServerConfig.load(config_file("relay.json", args.config))
     config = _apply_server_overrides(config, args)
     configure_logging(config.log_level, quiet=args.quiet)
 
@@ -555,7 +576,7 @@ def _apply_client_overrides(config: ClientConfig, args) -> ClientConfig:
 
 def cmd_connect(args) -> int:
     """Run the local proxy that tunnels through a relay."""
-    config = ClientConfig.load(Path(args.config).expanduser()) if args.config else ClientConfig()
+    config = ClientConfig.load(config_file("client.json", args.config))
 
     if getattr(args, "token", None):
         invite = decode_invite(args.token)
