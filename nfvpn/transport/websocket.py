@@ -538,11 +538,15 @@ class WebSocketTransport(Transport):
                     continue
             else:
                 message = b"".join(self._fragments)
-                self._fragments = []
-                self._fragment_opcode = None
                 if not frame.fin:
+                    # A message still arriving: keep the marker that says so.
+                    # Clearing it here made every fragment after the second look
+                    # like a continuation with no start, so a message split into
+                    # three frames was rejected and the carrier died.
                     self._fragments = [message]
                     continue
+                self._fragments = []
+                self._fragment_opcode = None
 
             if len(message) > self._max_message_size:
                 raise TransportError(
