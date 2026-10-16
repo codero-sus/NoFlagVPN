@@ -80,8 +80,10 @@ class ShapingProfile:
     def padded_plaintext(self, payload_length: int, rng: random.Random) -> int:
         """Return the encrypted-plaintext length that sees ``payload_length`` bytes.
 
-        The result is the observed carrier size minus the record header and the
-        AEAD tag, so ``observed_size = HEADER_SIZE + padded_plaintext``.
+        The result is the encrypted plaintext length; the observed carrier size
+        is that plus the record header and the AEAD tag
+        (``observed_size = HEADER_SIZE + TAG_SIZE + padded_plaintext``), which is
+        what ``Shaper.pad_record_size`` returns for an empty payload.
         """
         from nfvpn.framing.constants import HEADER_SIZE, TAG_SIZE
 
