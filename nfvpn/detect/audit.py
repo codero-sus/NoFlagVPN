@@ -115,16 +115,22 @@ def _permission_findings(audit: Audit, directory: Path) -> None:
     if not secrets:
         audit.add("info", "no key material found", f"nothing in {directory}")
         return
-    exposed: list[str] = []
+    exposed: list[tuple[Path, str]] = []
     for path in secrets:
-        mode = path.stat().st_mode
-        if mode & (stat.S_IRWXG | stat.S_IRWXO):
-            exposed.append(f"{path.name} ({stat.S_IMODE(mode):04o})")
+        mode = stat.S_IMODE(path.stat().st_mode)
+        if mode & 0o077:  # any group or other bit
+            exposed.append((path, f"{mode:04o}"))
     if exposed:
+        # The current mode is what makes the warning actionable - it is the
+        # difference between "someone told me to chmod" and "this file is 0644".
         audit.add(
             "warn",
             "key material is readable by other users",
-            "chmod 600 " + " ".join(str(directory / name.split(" ")[0]) for name in exposed),
+            "chmod 600 "
+            + " ".join(str(path) for path, _mode in exposed)
+            + " (currently "
+            + ", ".join(f"{path.name} at {mode}" for path, mode in exposed)
+            + ")",
         )
     else:
         audit.add("ok", "key material is private", f"{len(secrets)} file(s) at 0600 in {directory}")
@@ -195,12 +201,16 @@ def _shape_findings(audit: Audit, profile_name: str) -> None:
     payloads = [64, 256, 1400, 4096, 16384, 65536]
     rows = []
     for payload in payloads:
-        plaintext = shaper.padded_plaintext(payload + 2)
+        # The shaper's argument is the application payload; it adds the u16
+        # length prefix itself (framing/records.py passes `needed - 2`).  Passing
+        # payload + 2 here counted that prefix twice and made the reported
+        # overhead a couple of bytes per record heavier than it is.
+        plaintext = shaper.padded_plaintext(payload)
         total = HEADER_SIZE + TAG_SIZE + plaintext
         rows.append((payload, total, total - payload))
     overhead = sum(row[2] for row in rows) / sum(row[0] + row[2] for row in rows)
     sizes = {
-        HEADER_SIZE + TAG_SIZE + shaper.padded_plaintext(length + 2)
+        HEADER_SIZE + TAG_SIZE + shaper.padded_plaintext(length)
         for length in range(0, 20000, 13)
     }
     audit.facts["shaping profile"] = profile_name
