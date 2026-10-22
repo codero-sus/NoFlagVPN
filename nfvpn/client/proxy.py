@@ -26,6 +26,7 @@ import contextlib
 import ipaddress
 import logging
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from nfvpn.client.tunnel import Tunnel
 from nfvpn.config import ClientConfig
@@ -321,32 +322,41 @@ class LocalProxy:
             return
 
         if method == "CONNECT":
-            host, _, port_text = target.rpartition(":")
-            if not host:
-                host, port_text = target, "443"
-            await self._proxy_connection(
-                reader, writer, host.strip("[]"), int(port_text or 443), socks=False
-            )
+            try:
+                host, port = _parse_authority(target, default_port=443)
+            except ValueError:
+                await self._http_error(writer, 400, "Bad CONNECT authority")
+                return
+            await self._proxy_connection(reader, writer, host, port, socks=False)
             return
 
-        if not target.lower().startswith("http://"):
+        try:
+            parsed = urlsplit(target)
+            if parsed.scheme.lower() != "http" or not parsed.hostname:
+                raise ValueError("expected an absolute http:// URL")
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError("userinfo is not valid in a proxy request target")
+            host = parsed.hostname
+            parsed_port = parsed.port
+            port = 80 if parsed_port is None else parsed_port
+            if not 1 <= port <= 65535:
+                raise ValueError("port is outside the TCP port range")
+        except ValueError:
             await self._http_error(
                 writer, 400, "This proxy expects CONNECT or an absolute http:// URL"
             )
             return
 
-        remainder = target[len("http://") :]
-        authority, _, path = remainder.partition("/")
-        host, _, port_text = authority.rpartition(":")
-        if not host:
-            host, port_text = authority, "80"
+        path = parsed.path or "/"
+        if parsed.query:
+            path += "?" + parsed.query
         await self._proxy_http_request(
             reader,
             writer,
             host,
-            int(port_text or 80),
+            port,
             method,
-            "/" + path if path else "/",
+            path,
             version,
             headers,
         )
@@ -474,6 +484,25 @@ class LocalProxy:
             session = self.tunnel.session
             if session is not None:
                 session.streams.detach(stream)
+
+
+def _parse_authority(authority: str, *, default_port: int) -> tuple[str, int]:
+    """Parse CONNECT's host[:port], including bracketed IPv6 literals."""
+    parsed = urlsplit(f"//{authority}")
+    if (
+        not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("invalid CONNECT authority")
+    parsed_port = parsed.port
+    port = default_port if parsed_port is None else parsed_port
+    if not 1 <= port <= 65535:
+        raise ValueError("port is outside the TCP port range")
+    return parsed.hostname, port
 
 
 def _socks_code_for(reason: CloseReason) -> int:

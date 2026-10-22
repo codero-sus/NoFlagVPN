@@ -614,3 +614,82 @@ async def test_stop_closes_live_tunnels_rather_than_hanging():
     finally:
         with contextlib.suppress(Exception):
             await proxy.stop()
+
+
+async def test_absolute_http_uri_parses_bracketed_ipv6_and_preserves_query():
+    proxy, tunnel = await start_proxy()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.config.listen_port)
+        writer.write(
+            b"GET http://[2606:4700::1111]:8080/a/b?x=1 HTTP/1.1\r\n"
+            b"Host: [2606:4700::1111]:8080\r\n\r\n"
+        )
+        await writer.drain()
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while not tunnel.opened and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.02)
+        assert tunnel.opened == [("2606:4700::1111", 8080)]
+        await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+        assert tunnel.streams[0].sent[0].startswith(b"GET /a/b?x=1 HTTP/1.1\r\n")
+        writer.close()
+    finally:
+        await proxy.stop()
+
+
+async def test_absolute_http_uri_without_path_does_not_drop_its_query():
+    proxy, tunnel = await start_proxy()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.config.listen_port)
+        writer.write(b"GET http://example.com?search=term HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        await writer.drain()
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while not tunnel.opened and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.02)
+        assert tunnel.opened == [("example.com", 80)]
+        await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)
+        assert tunnel.streams[0].sent[0].startswith(b"GET /?search=term HTTP/1.1\r\n")
+        writer.close()
+    finally:
+        await proxy.stop()
+
+
+async def test_http_absolute_uri_with_an_invalid_port_returns_400():
+    proxy, tunnel = await start_proxy()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.config.listen_port)
+        writer.write(b"GET http://example.com:notaport/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        await writer.drain()
+        response = await asyncio.wait_for(reader.read(256), timeout=5)
+        assert response.startswith(b"HTTP/1.1 400")
+        assert tunnel.opened == []
+        writer.close()
+    finally:
+        await proxy.stop()
+
+
+async def test_connect_authority_parses_ipv6_literal_without_brackets_in_tunnel():
+    proxy, tunnel = await start_proxy()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.config.listen_port)
+        writer.write(b"CONNECT [2606:4700::1111]:443 HTTP/1.1\r\nHost: [2606:4700::1111]\r\n\r\n")
+        await writer.drain()
+        assert (await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=5)).startswith(
+            b"HTTP/1.1 200 Connection Established"
+        )
+        assert tunnel.opened == [("2606:4700::1111", 443)]
+        writer.close()
+    finally:
+        await proxy.stop()
+
+
+async def test_connect_with_a_malformed_authority_returns_400():
+    proxy, tunnel = await start_proxy()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.config.listen_port)
+        writer.write(b"CONNECT example.com:notaport HTTP/1.1\r\n\r\n")
+        await writer.drain()
+        assert (await asyncio.wait_for(reader.read(256), timeout=5)).startswith(b"HTTP/1.1 400")
+        assert tunnel.opened == []
+        writer.close()
+    finally:
+        await proxy.stop()
