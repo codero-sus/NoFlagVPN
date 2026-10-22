@@ -207,3 +207,15 @@ def test_networks_from_text_parses_and_refuses_junk():
 def test_default_denied_networks_are_valid_cidrs():
     for item in DEFAULT_DENIED_NETWORKS:
         assert ipaddress.ip_network(item, strict=False)
+
+
+def test_domain_suffix_rules_ignore_case_and_trailing_dns_root_dots():
+    """DNS names are case-insensitive and a final dot denotes the same FQDN."""
+    policy = EgressPolicy(
+        allow_domains=("Example.COM.",),
+        deny_domains=("BLOCKED.Example.COM.",),
+    )
+    assert policy.hostname_allowed("WWW.EXAMPLE.COM")[0] is True
+    assert policy.hostname_allowed("www.example.com.")[0] is True
+    assert policy.hostname_allowed("blocked.example.com")[0] is False
+    assert policy.hostname_allowed("notexample.com")[0] is False
