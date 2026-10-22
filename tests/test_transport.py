@@ -238,3 +238,25 @@ async def test_websocket_transport_construction_is_inert():
     transport = WebSocketTransport(asyncio.StreamReader(), None, peer="127.0.0.1:1")  # type: ignore[arg-type]
     assert transport.info.peer == "127.0.0.1:1"
     assert transport.info.encrypted is False
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "ws://[::1",
+        "ws://[::1]suffix",
+        "ws://[::1]:junk",
+        "ws://example.com]",
+    ],
+)
+def test_endpoint_rejects_malformed_ipv6_brackets_and_authority_suffixes(target):
+    with pytest.raises(ConfigError):
+        Endpoint.parse(target)
+
+
+def test_endpoint_parses_and_renders_a_bracketed_ipv6_literal():
+    endpoint = Endpoint.parse("wss://[2606:4700::1111]:443/cdn")
+    assert endpoint.host == "2606:4700::1111"
+    assert endpoint.port == 443
+    assert endpoint.authority == "[2606:4700::1111]:443"
+    assert endpoint.url() == "wss://[2606:4700::1111]:443/cdn"
