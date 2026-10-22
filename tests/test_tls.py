@@ -266,3 +266,19 @@ async def test_a_plain_http_client_gets_the_cover_page_over_tls(certificate):
         assert b"nginx" in head
     finally:
         await relay.stop()
+
+
+def test_an_unreadable_ca_bundle_is_a_config_error(tmp_path):
+    invalid_ca = tmp_path / "ca.pem"
+    invalid_ca.write_text("not a PEM certificate")
+    with pytest.raises(ConfigError, match="could not load CA file"):
+        client_context(ca_file=invalid_ca)
+
+
+def test_an_unreadable_server_key_pair_is_a_config_error(tmp_path):
+    cert = tmp_path / "relay.crt"
+    key = tmp_path / "relay.key"
+    cert.write_text("not a PEM certificate")
+    key.write_text("not a PEM private key")
+    with pytest.raises(ConfigError, match="could not load the certificate/key pair"):
+        server_context(cert_file=cert, key_file=key)

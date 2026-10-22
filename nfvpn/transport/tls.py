@@ -51,7 +51,10 @@ def client_context(
         path = Path(ca_file)
         if not path.exists():
             raise ConfigError(f"CA file not found: {path}")
-        context = ssl.create_default_context(cafile=str(path))
+        try:
+            context = ssl.create_default_context(cafile=str(path))
+        except (OSError, ssl.SSLError) as exc:
+            raise ConfigError(f"could not load CA file {path}: {exc}") from exc
     else:
         context = ssl.create_default_context()
 
@@ -78,7 +81,7 @@ def server_context(
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     try:
         context.load_cert_chain(certfile=str(cert_path), keyfile=str(key_path))
-    except ssl.SSLError as exc:
+    except (OSError, ssl.SSLError) as exc:
         raise ConfigError(f"could not load the certificate/key pair: {exc}") from exc
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     with contextlib.suppress(NotImplementedError):  # pragma: no cover
