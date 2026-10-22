@@ -13,6 +13,7 @@ Bare ``host:port`` is accepted and means ``wss://host:port/``.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import ssl
 from dataclasses import dataclass
 
@@ -110,12 +111,27 @@ class Endpoint:
             rest, _, path_tail = rest.partition("/")
             path = "/" + path_tail
         if rest.startswith("["):  # bracketed IPv6 literal
-            host, _, tail = rest[1:].partition("]")
-            rest = f"{host}{tail}"
-            port = _port_or_default(tail[1:] if tail.startswith(":") else "", scheme, text)
+            host, closing, tail = rest[1:].partition("]")
+            if not closing:
+                raise ConfigError(f"endpoint {text!r} has an unterminated IPv6 literal")
+            try:
+                ipaddress.IPv6Address(host)
+            except ValueError as exc:
+                raise ConfigError(f"endpoint {text!r} has an invalid IPv6 literal") from exc
+            if tail and not tail.startswith(":"):
+                raise ConfigError(f"endpoint {text!r} has junk after the IPv6 literal")
+            if tail == ":":
+                raise ConfigError(f"endpoint {text!r} has an empty port")
+            port = _port_or_default(tail[1:] if tail else "", scheme, text)
         else:
+            if "[" in rest or "]" in rest:
+                raise ConfigError(f"endpoint {text!r} has malformed address brackets")
+            if rest.count(":") > 1:
+                raise ConfigError(f"endpoint {text!r} must bracket IPv6 literals")
             if ":" in rest:
                 host, _, port_text = rest.rpartition(":")
+                if not port_text:
+                    raise ConfigError(f"endpoint {text!r} has an empty port")
             else:
                 host, port_text = rest, ""
             port = _port_or_default(port_text, scheme, text)
