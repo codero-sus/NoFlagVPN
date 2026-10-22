@@ -121,6 +121,9 @@ class EgressPolicy:
     _deny_nets: tuple = field(default=(), init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        for name in ("block_private", "allow_private_literals"):
+            if not isinstance(getattr(self, name), bool):
+                raise ConfigError(f"{name} must be a boolean")
         self._allow_nets = tuple(
             _network(item, "allow_networks") for item in self.allow_networks
         )
