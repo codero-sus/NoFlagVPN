@@ -219,3 +219,10 @@ def test_domain_suffix_rules_ignore_case_and_trailing_dns_root_dots():
     assert policy.hostname_allowed("www.example.com.")[0] is True
     assert policy.hostname_allowed("blocked.example.com")[0] is False
     assert policy.hostname_allowed("notexample.com")[0] is False
+
+
+def test_egress_boolean_options_reject_truthy_strings():
+    with pytest.raises(ConfigError, match="allow_private_literals must be a boolean"):
+        EgressPolicy(allow_private_literals="false")  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="block_private must be a boolean"):
+        EgressPolicy(block_private="false")  # type: ignore[arg-type]

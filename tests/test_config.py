@@ -365,3 +365,28 @@ def test_member_store_rejects_a_non_list_members_field(tmp_path):
     path.chmod(0o600)
     with pytest.raises(ConfigError, match="members must be a list"):
         MembershipStore.load(path)
+
+
+def test_string_false_cannot_enable_private_egress_literals():
+    with pytest.raises(ConfigError, match="allow_private_literals must be a boolean"):
+        ServerConfig.from_mapping({"egress": {"allow_private_literals": "false"}})
+
+
+def test_string_false_cannot_disable_client_tls_verification():
+    with pytest.raises(ConfigError, match="insecure_tls must be a boolean"):
+        ClientConfig.from_mapping({"insecure_tls": "false"})
+
+
+def test_string_false_cannot_enable_a_lan_bound_local_proxy():
+    with pytest.raises(ConfigError, match="expose_lan must be a boolean"):
+        ClientConfig.from_mapping({"expose_lan": "false"})
+
+
+def test_non_boolean_cover_traffic_setting_is_rejected():
+    with pytest.raises(ConfigError, match="cover_traffic must be a boolean"):
+        ServerConfig.from_mapping({"cover_traffic": "false"})
+
+
+def test_non_object_egress_setting_is_rejected():
+    with pytest.raises(ConfigError, match="egress must be a JSON object"):
+        ServerConfig.from_mapping({"egress": []})

@@ -31,6 +31,13 @@ from nfvpn.traffic.shaper import DEFAULT_PROFILE, profile_names
 from nfvpn.transport.websocket import PayloadEncoding
 
 
+def check_booleans(config: Any, names: Iterable[str]) -> None:
+    """Boolean settings must be JSON booleans, never truthy strings or integers."""
+    for name in names:
+        if not isinstance(getattr(config, name), bool):
+            raise ConfigError(f"{name} must be a boolean")
+
+
 def check_numbers(
     config: Any, *, positive: Iterable[str], non_negative: Iterable[str] = ()
 ) -> None:
@@ -202,6 +209,7 @@ class ServerConfig:
 
     # -- validation --------------------------------------------------------
     def __post_init__(self) -> None:
+        check_booleans(self, ("cover_traffic",))
         if self.encoding not in (PayloadEncoding.BINARY, PayloadEncoding.TEXT):
             raise ConfigError(
                 f"encoding must be '{PayloadEncoding.BINARY}' or '{PayloadEncoding.TEXT}'"
@@ -296,7 +304,11 @@ class ServerConfig:
                 f"unknown relay setting(s): {', '.join(sorted(unknown))} "
                 f"(known: {', '.join(sorted(known))})"
             )
-        egress_raw = raw.get("egress") or {}
+        egress_raw = raw.get("egress", {})
+        if egress_raw is None:
+            egress_raw = {}
+        if not isinstance(egress_raw, dict):
+            raise ConfigError("egress must be a JSON object")
         egress = EgressPolicy(
             allow_ports=tuple(int(item) for item in _as_tuple(egress_raw.get("allow_ports"))),
             deny_ports=tuple(
@@ -306,11 +318,11 @@ class ServerConfig:
             ),
             allow_networks=_as_tuple(egress_raw.get("allow_networks")),
             deny_networks=_as_tuple(egress_raw.get("deny_networks")),
-            block_private=bool(egress_raw.get("block_private", True)),
+            block_private=egress_raw.get("block_private", True),
             allow_domains=_as_tuple(egress_raw.get("allow_domains")),
             deny_domains=_as_tuple(egress_raw.get("deny_domains")),
             resolve_timeout=float(egress_raw.get("resolve_timeout", 10.0)),
-            allow_private_literals=bool(egress_raw.get("allow_private_literals", False)),
+            allow_private_literals=egress_raw.get("allow_private_literals", False),
         )
         kwargs = {key: value for key, value in raw.items() if key != "egress"}
         return cls(egress=egress, **kwargs)
@@ -354,6 +366,7 @@ class ClientConfig:
     an open proxy on your laptop is exactly the thing you are hiding from."""
 
     def __post_init__(self) -> None:
+        check_booleans(self, ("cover_traffic", "insecure_tls", "expose_lan"))
         if self.profile not in profile_names():
             raise ConfigError(
                 f"unknown shaping profile {self.profile!r}; expected one of "
