@@ -17,6 +17,7 @@ port would be a much more attractive target than the tunnel itself.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 from collections.abc import Iterable
@@ -38,6 +39,14 @@ def check_booleans(config: Any, names: Iterable[str]) -> None:
             raise ConfigError(f"{name} must be a boolean")
 
 
+def check_integers(config: Any, names: Iterable[str]) -> None:
+    """Count and port settings must be integers, not booleans or floats."""
+    for name in names:
+        value = getattr(config, name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ConfigError(f"{name} must be an integer")
+
+
 def check_numbers(
     config: Any, *, positive: Iterable[str], non_negative: Iterable[str] = ()
 ) -> None:
@@ -49,6 +58,12 @@ def check_numbers(
     Better to refuse the value at the door than to debug it at three in the
     morning.
     """
+    for name in (*positive, *non_negative):
+        value = getattr(config, name)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ConfigError(f"{name} must be a number")
+        if not math.isfinite(value):
+            raise ConfigError(f"{name} must be finite")
     for name in positive:
         value = getattr(config, name)
         if value <= 0:
@@ -210,6 +225,7 @@ class ServerConfig:
     # -- validation --------------------------------------------------------
     def __post_init__(self) -> None:
         check_booleans(self, ("cover_traffic",))
+        check_integers(self, ("listen_port", "max_streams", "window"))
         if self.encoding not in (PayloadEncoding.BINARY, PayloadEncoding.TEXT):
             raise ConfigError(
                 f"encoding must be '{PayloadEncoding.BINARY}' or '{PayloadEncoding.TEXT}'"
@@ -243,6 +259,11 @@ class ServerConfig:
             ),
             non_negative=("stats_interval",),
         )
+        if self.limit_mbps is not None:
+            if isinstance(self.limit_mbps, bool) or not isinstance(self.limit_mbps, (int, float)):
+                raise ConfigError("limit_mbps must be a number")
+            if not math.isfinite(self.limit_mbps):
+                raise ConfigError("limit_mbps must be finite")
         if self.limit_mbps is not None and self.limit_mbps <= 0:
             raise ConfigError(
                 f"limit_mbps must be greater than zero or left out entirely (meaning no "
@@ -367,6 +388,7 @@ class ClientConfig:
 
     def __post_init__(self) -> None:
         check_booleans(self, ("cover_traffic", "insecure_tls", "expose_lan"))
+        check_integers(self, ("listen_port", "max_streams", "window"))
         if self.profile not in profile_names():
             raise ConfigError(
                 f"unknown shaping profile {self.profile!r}; expected one of "
@@ -376,7 +398,10 @@ class ClientConfig:
             raise ConfigError(f"unknown encoding {self.encoding!r}")
         if not 1 <= self.listen_port <= 65535:
             raise ConfigError(f"listen_port {self.listen_port} is out of range")
-        check_numbers(self, positive=("max_streams", "window"))
+        check_numbers(
+            self,
+            positive=("max_streams", "window", "connect_timeout", "handshake_timeout"),
+        )
         if self.insecure_tls and self.ca_file:
             raise ConfigError("insecure_tls and ca_file are mutually exclusive")
 

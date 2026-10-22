@@ -226,3 +226,9 @@ def test_egress_boolean_options_reject_truthy_strings():
         EgressPolicy(allow_private_literals="false")  # type: ignore[arg-type]
     with pytest.raises(ConfigError, match="block_private must be a boolean"):
         EgressPolicy(block_private="false")  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
+def test_dns_resolution_timeout_must_be_finite_and_positive(timeout):
+    with pytest.raises(ConfigError, match="resolve_timeout"):
+        EgressPolicy(resolve_timeout=timeout)
