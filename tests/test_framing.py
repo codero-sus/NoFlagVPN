@@ -208,3 +208,47 @@ def test_counters_restart_under_a_new_key(key):
     reader.rotate(new_key, keep_previous=False)
     assert writer.counter == 0
     assert reader.decode(writer.encode(RecordType.DATA, 1, b"b")).payload == b"b"
+
+
+def test_replay_window_requires_a_positive_size():
+    with pytest.raises(ValueError, match="size must be positive"):
+        ReplayWindow(0)
+    with pytest.raises(ValueError, match="size must be positive"):
+        ReplayWindow(-1)
+
+
+def test_replay_window_rejects_negative_counters():
+    with pytest.raises(ReplayError, match="negative record counter"):
+        ReplayWindow().check_and_update(-1)
+
+
+def test_replay_window_trims_bits_and_expires_oldest_seen_counter():
+    window = ReplayWindow(4)
+    for counter in range(5):
+        window.check_and_update(counter)
+    assert window.highest == 4
+    assert window.seen(4)
+    assert window.seen(1)
+    assert not window.seen(0), "the oldest value is outside the sliding window"
+    with pytest.raises(ReplayError, match="older than the 4-record window"):
+        window.check_and_update(0)
+
+
+def test_replay_window_reset_forgets_the_old_key_generation():
+    window = ReplayWindow(8)
+    window.check_and_update(37)
+    window.reset()
+    assert window.highest == -1
+    assert not window.seen(37)
+    window.check_and_update(0)
+    assert window.seen(0)
+    assert "size=8, highest=0" in repr(window)
+
+
+def test_replay_window_forgets_bits_on_a_huge_forward_jump_without_a_huge_shift():
+    window = ReplayWindow(64)
+    window.check_and_update(1)
+    window.check_and_update(10**12)
+    assert window.highest == 10**12
+    assert window.seen(10**12)
+    assert not window.seen(1)
