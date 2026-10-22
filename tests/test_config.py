@@ -342,3 +342,26 @@ def test_membership_load_accepts_owner_read_only_files(tmp_path, member):
     store.save()
     path.chmod(0o400)
     assert MembershipStore.load(path).get("laptop") is not None
+
+
+def test_member_store_does_not_treat_string_false_as_an_enabled_member(member):
+    raw = member.to_dict()
+    raw["enabled"] = "false"
+    with pytest.raises(ConfigError, match="enabled must be a boolean"):
+        Member.from_dict(raw)
+
+
+def test_member_store_rejects_non_object_json(tmp_path):
+    path = tmp_path / "members.json"
+    path.write_text("[]")
+    path.chmod(0o600)
+    with pytest.raises(ConfigError, match="JSON object"):
+        MembershipStore.load(path)
+
+
+def test_member_store_rejects_a_non_list_members_field(tmp_path):
+    path = tmp_path / "members.json"
+    path.write_text('{"members": {"not": "a list"}}')
+    path.chmod(0o600)
+    with pytest.raises(ConfigError, match="members must be a list"):
+        MembershipStore.load(path)

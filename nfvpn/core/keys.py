@@ -270,6 +270,14 @@ class Member:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> Member:
+        enabled = raw.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ConfigError("member entry enabled must be a boolean")
+        tags = raw.get("tags", {})
+        if tags is None:
+            tags = {}
+        if not isinstance(tags, dict):
+            raise ConfigError("member entry tags must be an object")
         try:
             return cls(
                 name=str(raw["name"]),
@@ -279,8 +287,8 @@ class Member:
                 expires_at=(
                     float(raw["expires_at"]) if raw.get("expires_at") is not None else None
                 ),
-                enabled=bool(raw.get("enabled", True)),
-                tags={str(k): str(v) for k, v in (raw.get("tags") or {}).items()},
+                enabled=enabled,
+                tags={str(k): str(v) for k, v in tags.items()},
             )
         except KeyError as exc:
             raise ConfigError(f"member entry is missing {exc}") from exc
@@ -356,8 +364,15 @@ class MembershipStore:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any], path: Path | None = None) -> MembershipStore:
+        if not isinstance(raw, dict):
+            raise ConfigError("membership file must contain a JSON object")
+        entries = raw.get("members", [])
+        if not isinstance(entries, list):
+            raise ConfigError("membership file members must be a list")
         store = cls(path=path)
-        for entry in raw.get("members", []):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ConfigError("each membership entry must be a JSON object")
             store.add(Member.from_dict(entry), replace=True)
         return store
 
