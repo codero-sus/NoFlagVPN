@@ -371,6 +371,13 @@ class MembershipStore:
             raw = json.loads(store_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise ConfigError(f"membership file is not valid JSON: {store_path}") from exc
+
+        mode = store_path.stat().st_mode
+        if mode & (stat.S_IRWXG | stat.S_IRWXO):
+            raise ConfigError(
+                f"{store_path} is readable by other users (mode {stat.S_IMODE(mode):04o}); "
+                f"run `chmod 600 {store_path}`"
+            )
         store = cls.from_dict(raw, path=store_path)
         store.path = store_path
         return store
