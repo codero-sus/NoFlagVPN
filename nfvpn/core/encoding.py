@@ -22,7 +22,11 @@ def b64d(text: str) -> bytes:
     cleaned = "".join(text.split())
     padding = "=" * (-len(cleaned) % 4)
     try:
-        return base64.urlsafe_b64decode(cleaned + padding)
+        # urlsafe_b64decode() ignores every non-alphabet byte by default.  That
+        # turns a corrupted key like ``Zm9v$YmFy`` into valid ``foobar`` bytes,
+        # so use the same alphabet with strict validation after whitespace has
+        # already been removed intentionally above.
+        return base64.b64decode(cleaned + padding, altchars=b"-_", validate=True)
     except (binascii.Error, ValueError) as exc:
         raise EncodingError(
             f"not valid base64url: {text[:16]}… — check for a truncated copy/paste"
