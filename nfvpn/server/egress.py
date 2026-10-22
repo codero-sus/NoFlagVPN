@@ -148,10 +148,10 @@ class EgressPolicy:
     def hostname_allowed(self, host: str) -> tuple[bool, str]:
         lowered = host.strip().lower().rstrip(".")
         if self.allow_domains and not any(
-            lowered == suffix or lowered.endswith("." + suffix) for suffix in self.allow_domains
+            _matches_domain_suffix(lowered, suffix) for suffix in self.allow_domains
         ):
             return False, "hostname is outside the allow list"
-        if any(lowered == suffix or lowered.endswith("." + suffix) for suffix in self.deny_domains):
+        if any(_matches_domain_suffix(lowered, suffix) for suffix in self.deny_domains):
             return False, "hostname is on the deny list"
         return True, "hostname permitted"
 
@@ -191,6 +191,12 @@ class EgressPolicy:
             return Decision(True, Verdict.ALLOWED, detail, (literal,), port, host)
 
         return await resolve_and_authorize(host, port, self, resolver=resolver)
+
+
+def _matches_domain_suffix(host: str, suffix: str) -> bool:
+    """Match DNS suffixes case-insensitively and independent of a final dot."""
+    normalized = suffix.strip().lower().rstrip(".")
+    return bool(normalized) and (host == normalized or host.endswith("." + normalized))
 
 
 def _as_literal(host: str) -> str | None:
