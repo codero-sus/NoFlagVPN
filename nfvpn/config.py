@@ -184,9 +184,12 @@ def save_json(
 def _as_tuple(value: Any, cast=str) -> tuple:
     if value is None:
         return ()
-    if isinstance(value, (str, bytes)):
-        return (cast(value),)
-    return tuple(cast(item) for item in value)
+    try:
+        if isinstance(value, (str, bytes)):
+            return (cast(value),)
+        return tuple(cast(item) for item in value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"expected a list of {getattr(cast, '__name__', 'values')} values") from exc
 
 
 @dataclass
@@ -318,6 +321,8 @@ class ServerConfig:
 
     @classmethod
     def from_mapping(cls, raw: dict[str, Any]) -> ServerConfig:
+        if not isinstance(raw, dict):
+            raise ConfigError("relay config must be a JSON object")
         known = set(cls.__dataclass_fields__)
         unknown = set(raw) - known
         if unknown:
@@ -330,19 +335,20 @@ class ServerConfig:
             egress_raw = {}
         if not isinstance(egress_raw, dict):
             raise ConfigError("egress must be a JSON object")
+        try:
+            resolve_timeout = float(egress_raw.get("resolve_timeout", 10.0))
+        except (TypeError, ValueError) as exc:
+            raise ConfigError("egress resolve_timeout must be a number") from exc
         egress = EgressPolicy(
-            allow_ports=tuple(int(item) for item in _as_tuple(egress_raw.get("allow_ports"))),
-            deny_ports=tuple(
-                int(item)
-                for item in _as_tuple(egress_raw.get("deny_ports"))
-                or EgressPolicy().deny_ports
-            ),
+            allow_ports=_as_tuple(egress_raw.get("allow_ports"), int),
+            deny_ports=_as_tuple(egress_raw.get("deny_ports"), int)
+            or EgressPolicy().deny_ports,
             allow_networks=_as_tuple(egress_raw.get("allow_networks")),
             deny_networks=_as_tuple(egress_raw.get("deny_networks")),
             block_private=egress_raw.get("block_private", True),
             allow_domains=_as_tuple(egress_raw.get("allow_domains")),
             deny_domains=_as_tuple(egress_raw.get("deny_domains")),
-            resolve_timeout=float(egress_raw.get("resolve_timeout", 10.0)),
+            resolve_timeout=resolve_timeout,
             allow_private_literals=egress_raw.get("allow_private_literals", False),
         )
         kwargs = {key: value for key, value in raw.items() if key != "egress"}
@@ -412,6 +418,8 @@ class ClientConfig:
 
     @classmethod
     def from_mapping(cls, raw: dict[str, Any]) -> ClientConfig:
+        if not isinstance(raw, dict):
+            raise ConfigError("client config must be a JSON object")
         known = set(cls.__dataclass_fields__)
         unknown = set(raw) - known
         if unknown:
