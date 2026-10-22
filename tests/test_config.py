@@ -406,3 +406,17 @@ def test_non_finite_server_timeouts_are_rejected():
 def test_non_numeric_client_timeout_is_a_config_error():
     with pytest.raises(ConfigError, match="connect_timeout must be a number"):
         ClientConfig.from_mapping({"connect_timeout": "soon"})
+
+
+def test_bad_egress_numeric_settings_are_config_errors():
+    with pytest.raises(ConfigError, match="list of int"):
+        ServerConfig.from_mapping({"egress": {"allow_ports": ["not-a-port"]}})
+    with pytest.raises(ConfigError, match="resolve_timeout"):
+        ServerConfig.from_mapping({"egress": {"resolve_timeout": "soon"}})
+
+
+def test_config_mapping_entrypoints_reject_non_object_values():
+    with pytest.raises(ConfigError, match="relay config must be a JSON object"):
+        ServerConfig.from_mapping([])  # type: ignore[arg-type]
+    with pytest.raises(ConfigError, match="client config must be a JSON object"):
+        ClientConfig.from_mapping([])  # type: ignore[arg-type]
