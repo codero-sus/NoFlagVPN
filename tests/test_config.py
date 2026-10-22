@@ -390,3 +390,19 @@ def test_non_boolean_cover_traffic_setting_is_rejected():
 def test_non_object_egress_setting_is_rejected():
     with pytest.raises(ConfigError, match="egress must be a JSON object"):
         ServerConfig.from_mapping({"egress": []})
+
+
+@pytest.mark.parametrize("field", ["connect_timeout", "handshake_timeout"])
+def test_client_timeouts_must_be_positive(field):
+    with pytest.raises(ConfigError, match=field):
+        ClientConfig(**{field: 0})
+
+
+def test_non_finite_server_timeouts_are_rejected():
+    with pytest.raises(ConfigError, match="must be finite"):
+        ServerConfig(connect_timeout=float("nan"))
+
+
+def test_non_numeric_client_timeout_is_a_config_error():
+    with pytest.raises(ConfigError, match="connect_timeout must be a number"):
+        ClientConfig.from_mapping({"connect_timeout": "soon"})

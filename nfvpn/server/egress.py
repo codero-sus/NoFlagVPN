@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import math
 import socket
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -124,6 +125,12 @@ class EgressPolicy:
         for name in ("block_private", "allow_private_literals"):
             if not isinstance(getattr(self, name), bool):
                 raise ConfigError(f"{name} must be a boolean")
+        if isinstance(self.resolve_timeout, bool) or not isinstance(
+            self.resolve_timeout, (int, float)
+        ):
+            raise ConfigError("resolve_timeout must be a number")
+        if not math.isfinite(self.resolve_timeout) or self.resolve_timeout <= 0:
+            raise ConfigError("resolve_timeout must be finite and greater than zero")
         self._allow_nets = tuple(
             _network(item, "allow_networks") for item in self.allow_networks
         )
