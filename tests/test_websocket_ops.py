@@ -820,3 +820,16 @@ async def test_raw_info_describes_the_carrier():
         assert pipe.transport.info.kind == "raw"
         assert pipe.transport.info.encrypted is False
         assert pipe.transport.info.detail == "length-prefixed"
+
+
+async def test_raw_oversize_closes_carrier_before_bytes_can_be_misread_as_a_header():
+    async with RawPipe(max_size=64) as pipe:
+        # A second valid frame behind the invalid length must not be reinterpreted
+        # as data from the rejected frame on a subsequent receive().
+        pipe.peer_writer.write(struct.pack(">I", 65) + struct.pack(">I", 1) + b"x")
+        await pipe.peer_writer.drain()
+        with pytest.raises(TransportError, match="oversized message"):
+            await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
+        assert pipe.transport.is_open is False, "an unconsumed oversized body desynchronizes framing"
+        with pytest.raises(TransportError, match="carrier is closed"):
+            await pipe.transport.receive_message()

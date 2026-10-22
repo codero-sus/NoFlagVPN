@@ -87,6 +87,10 @@ class RawTCPTransport(Transport):
             raise TransportError("carrier closed") from exc
         (length,) = _LENGTH.unpack(header)
         if length > self._max_message_size:
+            # The body is still sitting in the TCP stream.  Reading another
+            # header would consume its first four bytes and permanently
+            # desynchronise framing, so reject the peer and close the carrier.
+            await self.close()
             raise TransportError(f"peer announced an oversized message ({length} bytes)")
         try:
             payload = await self._reader.readexactly(length) if length else b""
