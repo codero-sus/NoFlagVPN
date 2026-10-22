@@ -303,3 +303,24 @@ async def test_confirm_exchange_applies_a_deadline_to_waiting_for_peer():
 
 def test_decoy_linger_is_positive():
     assert DECOY_LINGER > 0
+
+
+async def test_run_closes_the_carrier_after_the_read_loop_ends():
+    channel = FakeChannel()
+    session = make_session(channel=channel, idle_timeout=0.001)
+    await session.run()
+    assert session.closed is True
+    assert channel.closed == 1
+    assert channel.transport.closes == 1, "run() owns the session's complete lifetime"
+
+
+async def test_cancelling_run_propagates_cancellation_after_cleaning_up():
+    channel = FakeChannel()
+    session = make_session(channel=channel)
+    running = asyncio.create_task(session.run())
+    await asyncio.sleep(0)
+    running.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await running
+    assert session.closed is True
+    assert channel.transport.closes == 1
