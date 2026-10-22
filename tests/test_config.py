@@ -323,3 +323,22 @@ def test_token_psk_is_usable_as_a_key():
     psk = parse_psk(generate_psk())
     assert b64d(b64e(psk)) == psk
     assert len(psk) == 32
+
+
+def test_membership_load_refuses_psk_files_readable_by_other_users(tmp_path, member):
+    path = tmp_path / "members.json"
+    store = MembershipStore(path=path)
+    store.add(member)
+    store.save()
+    path.chmod(0o644)
+    with pytest.raises(ConfigError, match="readable by other users"):
+        MembershipStore.load(path)
+
+
+def test_membership_load_accepts_owner_read_only_files(tmp_path, member):
+    path = tmp_path / "members.json"
+    store = MembershipStore(path=path)
+    store.add(member)
+    store.save()
+    path.chmod(0o400)
+    assert MembershipStore.load(path).get("laptop") is not None
