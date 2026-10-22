@@ -255,16 +255,16 @@ async def probe_endpoint(
                 certificate = ssl_object.getpeercert() or {}
                 names = [
                     value
-                    for key, value in certificate.get("subject", ())
-                    for value in key
-                    if key == "commonName"
+                    for relative_name in certificate.get("subject", ())
+                    for name, value in relative_name
+                    if name == "commonName"
                 ]
                 report.tls_details["subject_cn"] = ", ".join(names)
                 issuer = [
                     value
-                    for key, value in certificate.get("issuer", ())
-                    for value in key
-                    if key == "commonName"
+                    for relative_name in certificate.get("issuer", ())
+                    for name, value in relative_name
+                    if name == "commonName"
                 ]
                 report.tls_details["issuer_cn"] = ", ".join(issuer)
                 not_after = certificate.get("notAfter")
