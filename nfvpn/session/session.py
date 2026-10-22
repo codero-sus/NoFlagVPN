@@ -142,7 +142,7 @@ class Session:
             await self._read_task
         except asyncio.CancelledError:
             current = asyncio.current_task()
-            if current is not None and current.cancelling():
+            if current is not None and getattr(current, "cancelling", lambda: 0)():
                 raise
         finally:
             await self.close()
