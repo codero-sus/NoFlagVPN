@@ -130,11 +130,22 @@ class Session:
             self._read_task = asyncio.create_task(self._read_loop(), name="nfvpn-session-reader")
 
     async def run(self) -> None:
-        """Run until the session ends.  Returns normally on a clean shutdown."""
+        """Run until the session ends, then release the channel and carrier.
+
+        Cancellation of the read task during an explicit ``close()`` is a normal
+        shutdown.  Cancellation of this ``run()`` task belongs to its caller and
+        must still propagate after cleanup.
+        """
         await self.start()
         assert self._read_task is not None
-        with contextlib.suppress(asyncio.CancelledError):
+        try:
             await self._read_task
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise
+        finally:
+            await self.close()
 
     async def close(self, reason: CloseReason = CloseReason.LOCAL_SHUTDOWN) -> None:
         """Tear the session down: streams, channel, carrier.
