@@ -833,3 +833,16 @@ async def test_raw_oversize_closes_carrier_before_bytes_can_be_misread_as_a_head
         assert pipe.transport.is_open is False, "an unconsumed oversized body desynchronizes framing"
         with pytest.raises(TransportError, match="carrier is closed"):
             await pipe.transport.receive_message()
+
+
+async def test_raw_explicit_close_still_releases_writer_after_a_receive_error():
+    async with RawPipe() as pipe:
+        pipe.peer_writer.write(b"\x00\x00")
+        await pipe.peer_writer.drain()
+        pipe.peer_writer.close()
+        with pytest.raises(TransportError, match="carrier closed"):
+            await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
+        assert pipe.transport.is_open is False
+        assert pipe.transport._writer.is_closing() is True, "an errored transport must release its writer"
+        await pipe.transport.close()
+        assert pipe.transport._writer.is_closing() is True

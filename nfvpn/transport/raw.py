@@ -45,20 +45,25 @@ class RawTCPTransport(Transport):
         self._encrypted = encrypted
         self._max_message_size = max_message_size
         self._write_lock = asyncio.Lock()
+        self._close_lock = asyncio.Lock()
+        self._close_complete = False
 
     async def open(self) -> None:
         """Nothing to negotiate: the framing is the handshake."""
         return
 
     async def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            self._writer.close()
-            await asyncio.wait_for(self._writer.wait_closed(), timeout=5)
-        except (ConnectionError, OSError, RuntimeError, asyncio.TimeoutError):
-            pass
+        async with self._close_lock:
+            if self._close_complete:
+                return
+            self._closed = True
+            try:
+                self._writer.close()
+                await asyncio.wait_for(self._writer.wait_closed(), timeout=5)
+            except (ConnectionError, OSError, RuntimeError, asyncio.TimeoutError):
+                pass
+            finally:
+                self._close_complete = True
 
     async def send_message(self, payload: bytes) -> None:
         if self._closed:
@@ -73,7 +78,7 @@ class RawTCPTransport(Transport):
                 self._writer.write(frame)
                 await self._writer.drain()
         except (ConnectionError, OSError, RuntimeError) as exc:
-            self._closed = True
+            await self.close()
             raise self._wrap_error(exc, "carrier write failed") from exc
         self._note_sent(len(payload))
 
@@ -83,7 +88,7 @@ class RawTCPTransport(Transport):
         try:
             header = await self._reader.readexactly(_LENGTH.size)
         except (asyncio.IncompleteReadError, ConnectionError, OSError) as exc:
-            self._closed = True
+            await self.close()
             raise TransportError("carrier closed") from exc
         (length,) = _LENGTH.unpack(header)
         if length > self._max_message_size:
@@ -95,7 +100,7 @@ class RawTCPTransport(Transport):
         try:
             payload = await self._reader.readexactly(length) if length else b""
         except (asyncio.IncompleteReadError, ConnectionError, OSError) as exc:
-            self._closed = True
+            await self.close()
             raise TransportError("carrier closed mid-message") from exc
         self._note_received(len(payload))
         return payload
