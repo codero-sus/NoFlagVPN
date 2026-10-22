@@ -118,6 +118,8 @@ class Session:
         self._read_task: asyncio.Task[None] | None = None
         self._closed = False
         self._closing = asyncio.Event()
+        self._shutdown_lock = asyncio.Lock()
+        self._shutdown_complete = False
         self.last_error: BaseException | None = None
 
     # -- lifecycle ---------------------------------------------------------
@@ -135,22 +137,38 @@ class Session:
             await self._read_task
 
     async def close(self, reason: CloseReason = CloseReason.LOCAL_SHUTDOWN) -> None:
-        """Tear the session down: streams, channel, carrier."""
-        if self._closed:
-            return
-        self._closed = True
-        self._closing.set()
-        with contextlib.suppress(Exception):
-            await self.streams.close_all(reason)
-        with contextlib.suppress(Exception):
-            await self.channel.flush()
-        await self.channel.close()
-        if self._read_task is not None and not self._read_task.done():
-            self._read_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await self._read_task
-        with contextlib.suppress(Exception):
-            await self.channel.transport.close()
+        """Tear the session down: streams, channel, carrier.
+
+        The read loop can mark the session closed before its owner calls this
+        method.  ``_closed`` therefore means "stop reading", not "all resources
+        have been released"; teardown has its own completion flag so a dead
+        carrier still gets closed, and concurrent callers cannot close it twice.
+        """
+        async with self._shutdown_lock:
+            if self._shutdown_complete:
+                return
+            self._closed = True
+            self._closing.set()
+            try:
+                with contextlib.suppress(Exception):
+                    await self.streams.close_all(reason)
+                with contextlib.suppress(Exception):
+                    await self.channel.flush()
+                try:
+                    await self.channel.close()
+                finally:
+                    if (
+                        self._read_task is not None
+                        and self._read_task is not asyncio.current_task()
+                        and not self._read_task.done()
+                    ):
+                        self._read_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
+                            await self._read_task
+                    with contextlib.suppress(Exception):
+                        await self.channel.transport.close()
+            finally:
+                self._shutdown_complete = True
 
     async def _read_loop(self) -> None:
         """Decode records and hand them to the multiplexer."""
