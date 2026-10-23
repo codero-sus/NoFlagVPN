@@ -69,9 +69,11 @@ def server_context(
     key_file: str | Path | None,
     alpn: tuple[str, ...] = DEFAULT_ALPN,
 ) -> ssl.SSLContext | None:
-    """Build the server-side TLS context, or ``None`` if no certificate was given."""
-    if not cert_file or not key_file:
+    """Build the server-side TLS context, or ``None`` if TLS was not configured."""
+    if not cert_file and not key_file:
         return None
+    if not cert_file or not key_file:
+        raise ConfigError("TLS requires both a certificate and a private key")
     cert_path, key_path = Path(cert_file), Path(key_file)
     if not cert_path.exists():
         raise ConfigError(f"certificate not found: {cert_path}")
