@@ -908,3 +908,19 @@ async def test_client_rejects_masked_server_frames():
         await pipe.peer_writer.drain()
         with pytest.raises(TransportError, match="server frames must not be masked"):
             await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
+
+
+async def test_an_oversized_request_line_gets_a_bounded_cover_response(cover_server):
+    request = b"GET /" + b"x" * 17_000 + b" HTTP/1.1\r\nHost: relay.example\r\n\r\n"
+    response = await FakeClient(cover_server).request(request)
+    assert response.startswith(b"HTTP/1.1 414 URI Too Long"), response[:80]
+
+
+async def test_client_rejects_an_oversized_upgrade_response():
+    response = (
+        b"HTTP/1.1 101 Switching Protocols\r\n"
+        b"X-Large: " + b"x" * 256 + b"\r\n\r\n"
+    )
+    async with fake_server(response) as server:
+        with pytest.raises(TransportError, match="response headers exceed"):
+            await client_handshake(server.port, max_header_bytes=128)
