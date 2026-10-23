@@ -416,7 +416,8 @@ async def test_a_plain_http_request_is_forwarded_in_origin_form():
             b"Host: example.com\r\n"
             b"Proxy-Connection: keep-alive\r\n"
             b"Proxy-Authorization: Basic dXNlcjpwYXNz\r\n"
-            b"Connection: keep-alive\r\n"
+            b"Connection: keep-alive, X-Private-Hop\r\n"
+            b"X-Private-Hop: do-not-forward\r\n"
             b"Accept: */*\r\n\r\n"
         )
         await writer.drain()
@@ -432,6 +433,7 @@ async def test_a_plain_http_request_is_forwarded_in_origin_form():
         assert b"Proxy-Authorization" not in forwarded, "hop-by-hop header must not travel"
         assert b"Proxy-Connection" not in forwarded
         assert b"Connection: keep-alive" not in forwarded
+        assert b"X-Private-Hop" not in forwarded, "Connection-nominated headers are hop-by-hop"
         assert forwarded.endswith(b"Connection: close\r\n\r\n")
         writer.close()
     finally:

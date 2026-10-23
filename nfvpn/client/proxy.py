@@ -470,11 +470,26 @@ class LocalProxy:
 
         try:
             request = [f"{method} {path} {version}"]
+            connection_tokens = {
+                token.strip().lower()
+                for name, value in headers
+                if name.lower() == "connection"
+                for token in value.split(",")
+                if token.strip()
+            }
+            hop_by_hop = {
+                "connection",
+                "keep-alive",
+                "proxy-connection",
+                "proxy-authenticate",
+                "proxy-authorization",
+                "te",
+                "trailer",
+                "upgrade",
+            }
             for name, value in headers:
                 lowered = name.lower()
-                if lowered in ("proxy-authorization", "proxy-connection"):
-                    continue
-                if lowered in ("connection", "keep-alive"):
+                if lowered in hop_by_hop or lowered in connection_tokens:
                     continue
                 request.append(f"{name}: {value}")
             request.append("Connection: close")
