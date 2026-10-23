@@ -621,3 +621,28 @@ async def test_concurrent_sends_do_not_spend_the_same_stream_credit_twice():
     )
     await second
     assert channel.data() == [(2, b"1111"), (2, b"2222")]
+
+
+@pytest.mark.parametrize("port", [0, -1, 65536, True, 80.5, "80"])
+def test_open_serializer_rejects_invalid_tcp_ports(port):
+    with pytest.raises(ProtocolError, match="valid TCP port"):
+        pack_open(OpenRequest("example.com", port))  # type: ignore[arg-type]
+
+
+def test_open_serializer_rejects_host_controls_and_invalid_protocol_values():
+    with pytest.raises(ProtocolError, match="whitespace or control"):
+        pack_open(OpenRequest("example.com\r\nInjected: yes", 443))
+    with pytest.raises(ProtocolError, match="unsupported stream protocol"):
+        pack_open(OpenRequest("example.com", 443, proto=99))  # type: ignore[arg-type]
+
+
+def test_open_parser_rejects_port_zero():
+    payload = bytes([int(StreamProto.TCP)]) + struct.pack(">H", 0) + b"\x03abc"
+    with pytest.raises(ProtocolError, match="valid TCP port"):
+        unpack_open(payload)
+
+
+@pytest.mark.parametrize("value", [-1, 1 << 32, True, 1.5])
+def test_window_serializer_rejects_values_outside_unsigned_32_bit_range(value):
+    with pytest.raises(ProtocolError, match="unsigned 32-bit"):
+        pack_window(value)  # type: ignore[arg-type]

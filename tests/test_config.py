@@ -517,3 +517,15 @@ def test_identity_file_rejects_non_string_public_key(tmp_path):
     path.chmod(0o600)
     with pytest.raises(ConfigError, match="invalid public_key"):
         Identity.load(path)
+
+
+@pytest.mark.parametrize(
+    "config_factory",
+    [
+        lambda value: ServerConfig(window=value),
+        lambda value: ClientConfig(window=value),
+    ],
+)
+def test_configured_flow_control_window_fits_wire_credit_width(config_factory):
+    with pytest.raises(ConfigError, match="unsigned 32-bit"):
+        config_factory(1 << 32)

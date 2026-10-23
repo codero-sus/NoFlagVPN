@@ -280,6 +280,8 @@ class ServerConfig:
             raise ConfigError("tls_cert and tls_key must be set together")
         if not 1 <= self.listen_port <= 65535:
             raise ConfigError(f"listen_port {self.listen_port} is out of range")
+        if self.window > 0xFFFFFFFF:
+            raise ConfigError("window must fit an unsigned 32-bit credit value")
         check_numbers(
             self,
             positive=(
@@ -434,6 +436,8 @@ class ClientConfig:
             raise ConfigError(f"unknown encoding {self.encoding!r}")
         if not 1 <= self.listen_port <= 65535:
             raise ConfigError(f"listen_port {self.listen_port} is out of range")
+        if self.window > 0xFFFFFFFF:
+            raise ConfigError("window must fit an unsigned 32-bit credit value")
         check_numbers(
             self,
             positive=("max_streams", "window", "connect_timeout", "handshake_timeout"),
