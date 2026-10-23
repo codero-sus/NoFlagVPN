@@ -204,6 +204,7 @@ async def perform_client_handshake(
     subprotocol: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float = 15.0,
+    max_header_bytes: int = 16 * 1024,
 ) -> dict[str, str]:
     """Send a browser-shaped upgrade request and validate the response.
 
@@ -237,12 +238,19 @@ async def perform_client_handshake(
     except (ConnectionError, OSError) as exc:
         raise TransportError(f"failed to send the upgrade request: {exc}") from exc
 
+    if max_header_bytes <= 0:
+        raise TransportError("maximum response header size must be positive")
     try:
         status_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
     except (TimeoutError, asyncio.TimeoutError) as exc:
         raise TransportError("timed out waiting for the WebSocket response") from exc
+    except (ValueError, asyncio.LimitOverrunError) as exc:
+        raise TransportError("WebSocket response status line is too large") from exc
     if not status_line:
         raise TransportError("server closed the connection during the handshake")
+    if len(status_line) > max_header_bytes:
+        raise TransportError("WebSocket response headers exceed the configured size limit")
+    response_size = len(status_line)
 
     parts = status_line.decode("latin-1").rstrip("\r\n").split(" ", 2)
     if len(parts) < 2 or parts[1] != "101":
@@ -250,7 +258,15 @@ async def perform_client_handshake(
 
     response: dict[str, str] = {}
     while True:
-        line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        try:
+            line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        except (TimeoutError, asyncio.TimeoutError) as exc:
+            raise TransportError("timed out reading WebSocket response headers") from exc
+        except (ValueError, asyncio.LimitOverrunError) as exc:
+            raise TransportError("WebSocket response header line is too large") from exc
+        response_size += len(line)
+        if response_size > max_header_bytes:
+            raise TransportError("WebSocket response headers exceed the configured size limit")
         if not line or line in (b"\r\n", b"\n"):
             break
         if b":" not in line:
@@ -297,15 +313,24 @@ async def perform_server_handshake(
         request_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
     except (TimeoutError, asyncio.TimeoutError):
         return ServerHandshake(upgraded=False)
+    except (ValueError, asyncio.LimitOverrunError):
+        await _send_cover(writer, cover_body, server_header, status="414 URI Too Long")
+        return ServerHandshake(upgraded=False)
     if not request_line:
         return ServerHandshake(upgraded=False)
 
     headers: dict[str, str] = {}
     consumed = len(request_line)
+    if consumed > max_header_bytes:
+        await _send_cover(writer, cover_body, server_header, status="414 URI Too Long")
+        return ServerHandshake(upgraded=False)
     while True:
         try:
             line = await asyncio.wait_for(reader.readline(), timeout=timeout)
         except (TimeoutError, asyncio.TimeoutError):
+            return ServerHandshake(upgraded=False)
+        except (ValueError, asyncio.LimitOverrunError):
+            await _send_cover(writer, cover_body, server_header, status="431 Too Many Headers")
             return ServerHandshake(upgraded=False)
         if not line or line in (b"\r\n", b"\n"):
             break
