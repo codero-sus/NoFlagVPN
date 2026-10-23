@@ -252,12 +252,13 @@ a default.
 available (a port forward, an SSH tunnel, a LAN).  It is honest about being a
 tunnel and should not be used on a contested network.
 
-`tls://` and `wss://` wrap the carrier in TLS 1.2+ with ALPN advertising
-`h2,http/1.1`.  With `--tls-cert`/`--tls-key`, `nfvpn serve` speaks TLS itself;
-with a `--ca-file` or plain `wss://`, the client verifies the relay's
-certificate normally.  TLS-in-TLS is normal traffic now (every CDN does it), and
-it means an observer sees a certificate for a real domain rather than a
-self-signed one.
+`tls://` and `wss://` wrap the carrier in TLS 1.2+; clients offer the browser-like
+ALPN list `h2,http/1.1`, while the relay selects only `http/1.1` because it does
+not implement HTTP/2 extended CONNECT. With `--tls-cert`/`--tls-key`, `nfvpn
+serve` speaks TLS itself; with a `--ca-file` or plain `wss://`, the client
+verifies the relay's certificate normally. TLS-in-TLS is normal traffic now
+(every CDN does it), and it means an observer sees a certificate for a real
+domain rather than a self-signed one.
 
 ## 7. The handshake
 

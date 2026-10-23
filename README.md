@@ -102,9 +102,10 @@ make selftest     # ~30 end-to-end checks on loopback
 
 Useful flags:
 
-- `nfvpn serve --tls-cert cert.pem --tls-key key.pem` — serve real TLS, with
-  ALPN advertising `h2,http/1.1`.  `--disable-tls` is not a thing; use TLS in
-  production.
+- `nfvpn serve --tls-cert cert.pem --tls-key key.pem` — serve real TLS. Clients
+  offer browser-like `h2,http/1.1` ALPN, while the relay selects `http/1.1`
+  because it does not implement HTTP/2. `--disable-tls` is not a thing; use TLS
+  in production.
 - `nfvpn serve --profile paranoid` — sparser timing and more cover traffic.
 - `nfvpn serve --deny-network 10.0.0.0/8` — the private ranges are refused by
   default; this is for adding your own.

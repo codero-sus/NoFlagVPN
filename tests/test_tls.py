@@ -38,7 +38,7 @@ from nfvpn.errors import ConfigError, TransportError
 from nfvpn.selftest import start_origin
 from nfvpn.server.egress import EgressPolicy
 from nfvpn.server.relay import Relay
-from nfvpn.transport.tls import DEFAULT_ALPN, client_context, server_context
+from nfvpn.transport.tls import DEFAULT_ALPN, SERVER_ALPN, client_context, server_context
 
 
 def free_port() -> int:
@@ -119,11 +119,14 @@ def test_a_missing_certificate_or_key_is_a_config_error(tmp_path, certificate):
         server_context(cert_file=certificate[0], key_file=tmp_path / "nope.key")
 
 
-def test_the_server_offers_browser_alpn_and_no_old_tls(certificate):
+def test_client_offers_browser_alpn_but_server_only_offers_supported_http(certificate):
     context = server_context(cert_file=certificate[0], key_file=certificate[1])
     assert context is not None
     assert context.minimum_version >= ssl.TLSVersion.TLSv1_2
-    assert DEFAULT_ALPN == ("h2", "http/1.1"), "an unusual ALPN list is a fingerprint"
+    assert DEFAULT_ALPN == ("h2", "http/1.1"), "client order should resemble browsers"
+    assert SERVER_ALPN == ("http/1.1",), "the relay cannot negotiate an unimplemented h2 protocol"
+    with pytest.raises(ConfigError, match="does not implement HTTP/2"):
+        server_context(cert_file=certificate[0], key_file=certificate[1], alpn=DEFAULT_ALPN)
 
 
 def test_pinning_a_ca_that_does_not_exist_is_refused():
@@ -253,13 +256,15 @@ async def test_a_plain_http_client_gets_the_cover_page_over_tls(certificate):
         certificate, client_ca=str(certificate[0]), insecure=False
     )
     context = ssl.create_default_context(cafile=str(certificate[0]))
-    context.set_alpn_protocols(["http/1.1"])
+    context.set_alpn_protocols(list(DEFAULT_ALPN))
     try:
         # Dial the relay's own port, not the local proxy: this is the scanner's
         # view of the carrier.
         reader, writer = await asyncio.open_connection(
             "127.0.0.1", relay.config.listen_port, ssl=context, server_hostname="localhost"
         )
+        ssl_object = writer.get_extra_info("ssl_object")
+        assert ssl_object.selected_alpn_protocol() == "http/1.1"
         writer.write(b"GET /nothing-here HTTP/1.1\r\nHost: localhost\r\n\r\n")
         await writer.drain()
         head = await asyncio.wait_for(reader.read(400), timeout=20)
