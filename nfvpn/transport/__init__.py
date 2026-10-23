@@ -16,6 +16,7 @@ import asyncio
 import ipaddress
 import ssl
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from nfvpn.errors import ConfigError, TransportError
 from nfvpn.transport.base import Transport, TransportInfo
@@ -97,12 +98,42 @@ class Endpoint:
         raw = text.strip()
         if not raw:
             raise ConfigError("empty endpoint")
+        if any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in raw):
+            raise ConfigError("endpoint must not contain whitespace or control characters")
 
         scheme = default_scheme
         rest = raw
         if "://" in raw:
-            scheme, _, rest = raw.partition("://")
-            scheme = scheme.lower()
+            try:
+                parsed = urlsplit(raw)
+            except ValueError as exc:
+                raise ConfigError(f"endpoint {text!r} has an invalid authority") from exc
+            scheme = parsed.scheme.lower()
+            if scheme not in _DEFAULT_PORTS:
+                raise ConfigError(f"unsupported carrier scheme {scheme!r}")
+            if not parsed.netloc or not parsed.hostname:
+                raise ConfigError(f"endpoint {text!r} has no host")
+            if parsed.username is not None or parsed.password is not None:
+                raise ConfigError("endpoint userinfo is not supported")
+            if "#" in raw:
+                raise ConfigError("endpoint fragments are not sent to the relay")
+            host = parsed.hostname
+            if parsed.netloc.startswith("["):
+                try:
+                    ipaddress.IPv6Address(host)
+                except ValueError as exc:
+                    raise ConfigError(f"endpoint {text!r} has an invalid IPv6 literal") from exc
+            try:
+                parsed_port = parsed.port
+            except ValueError as exc:
+                if "Port could not be cast to integer" in str(exc):
+                    raise ConfigError(f"endpoint {text!r} has a non-numeric port") from exc
+                raise ConfigError(f"endpoint {text!r} has an invalid port") from exc
+            port = _DEFAULT_PORTS[scheme] if parsed_port is None else parsed_port
+            path = parsed.path or "/"
+            if parsed.query:
+                path += "?" + parsed.query
+            return cls(scheme=scheme, host=host, port=port, path=path)
         if scheme not in _DEFAULT_PORTS:
             raise ConfigError(f"unsupported carrier scheme {scheme!r}")
 
