@@ -104,8 +104,10 @@ def certificate(tmp_path_factory) -> tuple[Path, Path]:
 def test_the_server_context_needs_both_halves(certificate):
     cert_path, key_path = certificate
     assert server_context(cert_file=None, key_file=None) is None
-    assert server_context(cert_file=cert_path, key_file=None) is None
-    assert server_context(cert_file=None, key_file=key_path) is None
+    with pytest.raises(ConfigError, match=r"both.*certificate.*private key"):
+        server_context(cert_file=cert_path, key_file=None)
+    with pytest.raises(ConfigError, match=r"both.*certificate.*private key"):
+        server_context(cert_file=None, key_file=key_path)
     assert server_context(cert_file=cert_path, key_file=key_path) is not None
 
 
