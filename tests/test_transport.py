@@ -260,3 +260,30 @@ def test_endpoint_parses_and_renders_a_bracketed_ipv6_literal():
     assert endpoint.port == 443
     assert endpoint.authority == "[2606:4700::1111]:443"
     assert endpoint.url() == "wss://[2606:4700::1111]:443/cdn"
+
+
+def test_endpoint_uri_query_is_part_of_the_request_path_not_the_hostname():
+    root_query = Endpoint.parse("wss://relay.example?tenant=game")
+    assert root_query.host == "relay.example"
+    assert root_query.path == "/?tenant=game"
+    path_query = Endpoint.parse("wss://relay.example/cdn?tenant=game")
+    assert path_query.path == "/cdn?tenant=game"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "wss://user@relay.example/cdn",
+        "wss://relay.example/cdn#fragment",
+        "wss://relay.example/cdn\r\nX-Test: injected",
+    ],
+)
+def test_endpoint_rejects_userinfo_fragments_and_header_injection(target):
+    with pytest.raises(ConfigError):
+        Endpoint.parse(target)
+
+
+def test_endpoint_keeps_percent_encoded_controls_encoded_in_the_path():
+    endpoint = Endpoint.parse("wss://relay.example/cdn%0d%0aX-Test")
+    assert endpoint.host == "relay.example"
+    assert endpoint.path == "/cdn%0d%0aX-Test"
