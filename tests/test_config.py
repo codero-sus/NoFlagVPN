@@ -495,3 +495,25 @@ def test_membership_store_reports_invalid_utf8_as_a_configuration_error(tmp_path
 def test_relay_http_settings_reject_invalid_types_and_header_injection(field, value):
     with pytest.raises(ConfigError, match=field):
         ServerConfig.from_mapping({field: value})
+
+
+def test_identity_file_rejects_public_key_that_does_not_match_private_key(tmp_path):
+    path = tmp_path / "identity.key"
+    Identity.generate("relay").save(path)
+    payload = json.loads(path.read_text())
+    payload["public_key"] = b64e(bytes([1]) * 32)
+    path.write_text(json.dumps(payload))
+    path.chmod(0o600)
+    with pytest.raises(ConfigError, match="public_key does not match private_key"):
+        Identity.load(path)
+
+
+def test_identity_file_rejects_non_string_public_key(tmp_path):
+    path = tmp_path / "identity.key"
+    Identity.generate("relay").save(path)
+    payload = json.loads(path.read_text())
+    payload["public_key"] = 123
+    path.write_text(json.dumps(payload))
+    path.chmod(0o600)
+    with pytest.raises(ConfigError, match="invalid public_key"):
+        Identity.load(path)

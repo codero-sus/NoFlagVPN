@@ -194,6 +194,18 @@ class Identity:
             private_key = b64d(encoded_private_key)
         except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"identity file {key_path} has no usable private_key") from exc
+        encoded_public_key = raw.get("public_key")
+        if encoded_public_key is not None:
+            if not isinstance(encoded_public_key, str):
+                raise ConfigError(f"identity file {key_path} has an invalid public_key")
+            try:
+                stored_public_key = b64d(encoded_public_key)
+            except ValueError as exc:
+                raise ConfigError(f"identity file {key_path} has an invalid public_key") from exc
+            if stored_public_key != public_key_for(private_key):
+                raise ConfigError(
+                    f"identity file {key_path} public_key does not match private_key"
+                )
         try:
             created_at = float(raw["created_at"]) if raw.get("created_at") is not None else time.time()
         except (TypeError, ValueError) as exc:
