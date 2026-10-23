@@ -632,12 +632,15 @@ async def test_a_continuation_without_a_start_is_refused():
             await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
 
 
-async def test_an_unsupported_opcode_is_refused():
+async def test_an_unsupported_opcode_is_refused_and_closes_the_carrier():
     async with Pipe(server_side=True) as pipe:
         pipe.peer_writer.write(write_frame(0x3, b"data", mask=True))  # a reserved data opcode
         await pipe.peer_writer.drain()
         with pytest.raises(TransportError, match="unsupported opcode 0x3"):
             await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
+        assert pipe.transport.is_open is False
+        await pipe.transport.close()
+        assert await asyncio.wait_for(pipe.peer_reader.read(), timeout=5) == b""
 
 
 async def test_an_oversized_message_is_refused_with_the_limit():

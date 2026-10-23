@@ -26,6 +26,7 @@ import contextlib
 import secrets
 import struct
 from dataclasses import dataclass
+from typing import NoReturn
 
 from nfvpn.errors import TransportError
 from nfvpn.transport.base import Transport, TransportInfo
@@ -456,6 +457,8 @@ class WebSocketTransport(Transport):
         self._cover_body = cover_body
         self._server_header = server_header
         self._write_lock = asyncio.Lock()
+        self._close_lock = asyncio.Lock()
+        self._close_complete = False
         self._fragments: list[bytes] = []
         self._fragment_size = 0
         self._fragment_opcode: int | None = None
@@ -489,23 +492,34 @@ class WebSocketTransport(Transport):
             )
 
     async def close(self) -> None:
-        """Send a close frame (best effort) and drop the socket."""
-        if self._closed:
-            return
+        """Send a close frame when possible, then always drop the socket."""
+        async with self._close_lock:
+            if self._close_complete:
+                return
+            already_closed = self._closed
+            self._closed = True
+            if not already_closed:
+                try:
+                    async with self._write_lock:
+                        self._writer.write(
+                            write_frame(OP_CLOSE, struct.pack(">H", 1000), mask=not self._server_side)
+                        )
+                        await self._writer.drain()
+                except (ConnectionError, OSError, RuntimeError):
+                    pass
+            try:
+                self._writer.close()
+                await asyncio.wait_for(self._writer.wait_closed(), timeout=5)
+            except (ConnectionError, OSError, RuntimeError, asyncio.TimeoutError):
+                pass
+            finally:
+                self._close_complete = True
+
+    async def _abort(self, message: str) -> NoReturn:
+        """Mark a protocol failure terminal and release its socket immediately."""
         self._closed = True
-        try:
-            async with self._write_lock:
-                self._writer.write(
-                    write_frame(OP_CLOSE, struct.pack(">H", 1000), mask=not self._server_side)
-                )
-                await self._writer.drain()
-        except (ConnectionError, OSError, RuntimeError):
-            pass
-        try:
-            self._writer.close()
-            await asyncio.wait_for(self._writer.wait_closed(), timeout=5)
-        except (ConnectionError, OSError, RuntimeError, asyncio.TimeoutError):
-            pass
+        await self.close()
+        raise TransportError(message)
 
     async def send_message(self, payload: bytes) -> None:
         """Send one application message (binary frame, or base64 text frame)."""
@@ -528,6 +542,7 @@ class WebSocketTransport(Transport):
                 await self._writer.drain()
         except (ConnectionError, OSError, RuntimeError) as exc:
             self._closed = True
+            await self.close()
             raise self._wrap_error(exc, "carrier write failed") from exc
         self._note_sent(len(frame))
 
@@ -541,15 +556,13 @@ class WebSocketTransport(Transport):
         while True:
             try:
                 frame = await read_frame(self._reader, max_payload_size=frame_limit)
-            except TransportError as exc:
-                self._closed = True
-                raise TransportError(f"carrier read failed: {exc}") from exc
+            except (TransportError, ConnectionError, OSError) as exc:
+                await self._abort(f"carrier read failed: {exc}")
 
             if frame.masked != self._server_side:
-                self._closed = True
                 peer_role = "client" if self._server_side else "server"
                 requirement = "must be masked" if self._server_side else "must not be masked"
-                raise TransportError(f"{peer_role} frames {requirement}")
+                await self._abort(f"{peer_role} frames {requirement}")
 
             if frame.opcode == OP_PING:
                 await self._send_control(OP_PONG, frame.payload)
@@ -559,11 +572,14 @@ class WebSocketTransport(Transport):
             if frame.opcode == OP_CLOSE:
                 await self._send_control(OP_CLOSE, frame.payload[:2])
                 self._closed = True
+                await self.close()
                 raise TransportError("peer closed the carrier")
 
             if frame.opcode in (OP_TEXT, OP_BINARY):
                 if self._fragment_opcode is not None:
-                    raise TransportError("new data frame received before fragmented message completed")
+                    await self._abort(
+                        "new data frame received before fragmented message completed"
+                    )
                 if frame.fin:
                     message_opcode = frame.opcode
                     wire_message = frame.payload
@@ -572,17 +588,17 @@ class WebSocketTransport(Transport):
                     self._fragments = [frame.payload]
                     self._fragment_size = len(frame.payload)
                     if self._fragment_size > frame_limit:
-                        raise TransportError(
+                        await self._abort(
                             f"message exceeds the {self._max_message_size}-byte carrier limit"
                         )
                     continue
             elif frame.opcode == OP_CONTINUATION:
                 if self._fragment_opcode is None:
-                    raise TransportError("continuation frame without a start")
+                    await self._abort("continuation frame without a start")
                 self._fragments.append(frame.payload)
                 self._fragment_size += len(frame.payload)
                 if self._fragment_size > frame_limit:
-                    raise TransportError(
+                    await self._abort(
                         f"message exceeds the {self._max_message_size}-byte carrier limit"
                     )
                 if not frame.fin:
@@ -593,7 +609,7 @@ class WebSocketTransport(Transport):
                 self._fragment_size = 0
                 self._fragment_opcode = None
             else:
-                raise TransportError(f"unsupported opcode 0x{frame.opcode:x}")
+                await self._abort(f"unsupported opcode 0x{frame.opcode:x}")
 
             if message_opcode == OP_TEXT:
                 if self._encoding != PayloadEncoding.TEXT:
@@ -602,15 +618,15 @@ class WebSocketTransport(Transport):
                     continue
                 try:
                     message = base64.b64decode(wire_message, validate=True)
-                except (binascii.Error, ValueError) as exc:
-                    raise TransportError("malformed base64 text message") from exc
+                except (binascii.Error, ValueError):
+                    await self._abort("malformed base64 text message")
             elif self._encoding == PayloadEncoding.TEXT:
                 continue
             else:
                 message = wire_message
 
             if len(message) > self._max_message_size:
-                raise TransportError(
+                await self._abort(
                     f"message of {len(message)} bytes exceeds the "
                     f"{self._max_message_size}-byte carrier limit"
                 )
