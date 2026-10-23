@@ -192,6 +192,27 @@ def _as_tuple(value: Any, cast=str) -> tuple:
         raise ConfigError(f"expected a list of {getattr(cast, '__name__', 'values')} values") from exc
 
 
+def _as_ports(value: Any) -> tuple[int, ...]:
+    """Parse TCP ports without truncating floats or accepting booleans."""
+    if value is None:
+        return ()
+    values = (value,) if isinstance(value, (str, int)) else value
+    try:
+        ports: list[int] = []
+        for item in values:
+            if isinstance(item, bool):
+                raise ValueError("booleans are not ports")
+            if isinstance(item, int):
+                ports.append(item)
+            elif isinstance(item, str) and re.fullmatch(r"[+-]?\d+", item.strip()):
+                ports.append(int(item))
+            else:
+                raise ValueError("ports must be integers")
+        return tuple(ports)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError("expected a list of int values") from exc
+
+
 @dataclass
 class ServerConfig:
     """Everything a relay needs to know about itself."""
@@ -340,8 +361,8 @@ class ServerConfig:
         except (TypeError, ValueError) as exc:
             raise ConfigError("egress resolve_timeout must be a number") from exc
         egress = EgressPolicy(
-            allow_ports=_as_tuple(egress_raw.get("allow_ports"), int),
-            deny_ports=_as_tuple(egress_raw.get("deny_ports"), int)
+            allow_ports=_as_ports(egress_raw.get("allow_ports")),
+            deny_ports=_as_ports(egress_raw.get("deny_ports"))
             or EgressPolicy().deny_ports,
             allow_networks=_as_tuple(egress_raw.get("allow_networks")),
             deny_networks=_as_tuple(egress_raw.get("deny_networks")),
