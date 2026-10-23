@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import math
 import os
 import stat
 import time
@@ -175,8 +176,10 @@ class Identity:
             raw = json.loads(key_path.read_text(encoding="utf-8"))
         except FileNotFoundError as exc:
             raise ConfigError(f"identity file not found: {key_path}") from exc
-        except json.JSONDecodeError as exc:
-            raise ConfigError(f"identity file is not valid JSON: {key_path}") from exc
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ConfigError(f"identity file is not valid UTF-8 JSON: {key_path}") from exc
+        if not isinstance(raw, dict):
+            raise ConfigError(f"identity file must be a JSON object: {key_path}")
 
         mode = key_path.stat().st_mode
         if mode & (stat.S_IRWXG | stat.S_IRWXO):
@@ -185,13 +188,22 @@ class Identity:
                 f"run `chmod 600 {key_path}`"
             )
         try:
-            private_key = b64d(raw["private_key"])
-        except (KeyError, ValueError) as exc:
+            encoded_private_key = raw["private_key"]
+            if not isinstance(encoded_private_key, str):
+                raise ValueError("private_key must be a string")
+            private_key = b64d(encoded_private_key)
+        except (KeyError, TypeError, ValueError) as exc:
             raise ConfigError(f"identity file {key_path} has no usable private_key") from exc
+        try:
+            created_at = float(raw["created_at"]) if raw.get("created_at") is not None else time.time()
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"identity file {key_path} has invalid created_at") from exc
+        if not math.isfinite(created_at):
+            raise ConfigError(f"identity file {key_path} has invalid created_at")
         return cls(
             name=str(raw.get("name") or "unnamed"),
             private_key=private_key,
-            created_at=float(raw.get("created_at") or time.time()),
+            created_at=created_at,
         )
 
     @classmethod
