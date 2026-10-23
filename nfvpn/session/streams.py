@@ -83,10 +83,30 @@ class OpenRequest:
         return f"{self.host}:{self.port}"
 
 
-def pack_open(request: OpenRequest) -> bytes:
-    host = request.host.encode("utf-8")
-    if len(host) > 255:
+def _encode_open_host(host: str) -> bytes:
+    if not isinstance(host, str) or not host:
+        raise ProtocolError("OPEN hostname must be a non-empty string")
+    if any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in host):
+        raise ProtocolError("OPEN hostname contains whitespace or control characters")
+    try:
+        encoded = host.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ProtocolError("OPEN hostname is not valid UTF-8 text") from exc
+    if len(encoded) > 255:
         raise ProtocolError("hostname is too long for an OPEN message")
+    return encoded
+
+
+def _validate_port(port: int) -> None:
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ProtocolError(f"OPEN port {port!r} is not a valid TCP port")
+
+
+def pack_open(request: OpenRequest) -> bytes:
+    host = _encode_open_host(request.host)
+    _validate_port(request.port)
+    if not isinstance(request.proto, StreamProto):
+        raise ProtocolError(f"unsupported stream protocol {request.proto!r}")
     return (
         bytes([int(request.proto)])
         + _PORT.pack(request.port)
@@ -111,6 +131,8 @@ def unpack_open(payload: bytes) -> OpenRequest:
         raise ProtocolError("OPEN message has a non-UTF-8 host") from exc
     if not host:
         raise ProtocolError("OPEN message has an empty host")
+    _encode_open_host(host)
+    _validate_port(port)
     return OpenRequest(host=host, port=port, proto=proto_enum)
 
 
@@ -119,6 +141,8 @@ def pack_close(reason: CloseReason) -> bytes:
 
 
 def pack_window(delta: int) -> bytes:
+    if isinstance(delta, bool) or not isinstance(delta, int) or not 0 <= delta <= 0xFFFFFFFF:
+        raise ProtocolError("WINDOW credit must fit an unsigned 32-bit integer")
     return _U32.pack(delta)
 
 
