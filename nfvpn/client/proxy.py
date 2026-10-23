@@ -238,7 +238,11 @@ class LocalProxy:
             await writer.drain()
 
         header = await asyncio.wait_for(reader.readexactly(4), timeout=HANDSHAKE_TIMEOUT)
-        command, address_type = header[1], header[3]
+        command, reserved, address_type = header[1], header[2], header[3]
+        if reserved != 0:
+            await self._socks_reply(writer, _REPLY_GENERAL_FAILURE)
+            self.log.debug("refused SOCKS request with non-zero reserved byte")
+            return
         if command != _CMD_CONNECT:
             await self._socks_reply(writer, _REPLY_COMMAND_UNSUPPORTED)
             self.log.debug("refused SOCKS command 0x%02x (only CONNECT is supported)", command)
@@ -290,8 +294,16 @@ class LocalProxy:
     async def _serve_http(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, first_byte: bytes
     ) -> None:
-        rest = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
-        request_line = (first_byte + rest).decode("latin-1").rstrip("\r\n")
+        try:
+            rest = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
+        except (ValueError, asyncio.LimitOverrunError):
+            await self._http_error(writer, 414, "URI Too Long")
+            return
+        request_line_bytes = first_byte + rest
+        if len(request_line_bytes) > 65536:
+            await self._http_error(writer, 414, "URI Too Long")
+            return
+        request_line = request_line_bytes.decode("latin-1").rstrip("\r\n")
         parts = request_line.split(" ")
         if len(parts) < 3:
             await self._http_error(writer, 400, "Bad Request")
@@ -299,14 +311,21 @@ class LocalProxy:
         method, target, version = parts[0].upper(), parts[1], parts[2]
 
         headers: list[tuple[str, str]] = []
-        total = 0
+        total = len(request_line_bytes)
         while True:
-            line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
+            try:
+                line = await asyncio.wait_for(reader.readline(), timeout=HANDSHAKE_TIMEOUT)
+            except (ValueError, asyncio.LimitOverrunError):
+                await self._http_error(writer, 431, "Request Header Fields Too Large")
+                return
             total += len(line)
             if line in (b"\r\n", b"\n", b""):
                 break
             if total > 65536:
                 await self._http_error(writer, 431, "Request Header Fields Too Large")
+                return
+            if b":" not in line:
+                await self._http_error(writer, 400, "Malformed Request Header")
                 return
             name, _, value = line.decode("latin-1").partition(":")
             headers.append((name.strip(), value.strip()))

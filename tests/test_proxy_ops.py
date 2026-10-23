@@ -695,3 +695,42 @@ async def test_connect_with_a_malformed_authority_returns_400():
         writer.close()
     finally:
         await proxy.stop()
+
+
+async def test_socks5_request_with_nonzero_reserved_byte_is_rejected():
+    proxy, tunnel = await start_proxy()
+    try:
+        reader, writer = await socks_client(proxy.config.listen_port)
+        writer.write(b"\x05\x01\x01\x01" + bytes([93, 184, 216, 34]) + struct.pack(">H", 443))
+        await writer.drain()
+        assert await read_socks_reply(reader) == 0x01
+        assert tunnel.opened == []
+        writer.close()
+    finally:
+        await proxy.stop()
+
+
+async def test_http_proxy_rejects_oversized_request_lines_with_414():
+    proxy, _tunnel = await start_proxy()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.config.listen_port)
+        writer.write(b"GET " + b"x" * 65_540 + b" HTTP/1.1\r\n\r\n")
+        await writer.drain()
+        response = await asyncio.wait_for(reader.read(200), timeout=5)
+        assert response.startswith(b"HTTP/1.1 414 URI Too Long")
+        writer.close()
+    finally:
+        await proxy.stop()
+
+
+async def test_http_proxy_rejects_header_lines_without_a_colon():
+    proxy, _tunnel = await start_proxy()
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", proxy.config.listen_port)
+        writer.write(b"GET http://example.com/ HTTP/1.1\r\nmalformed\r\n\r\n")
+        await writer.drain()
+        response = await asyncio.wait_for(reader.read(200), timeout=5)
+        assert response.startswith(b"HTTP/1.1 400 Malformed Request Header")
+        writer.close()
+    finally:
+        await proxy.stop()
