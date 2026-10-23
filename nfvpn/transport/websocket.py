@@ -86,6 +86,7 @@ class Frame:
     opcode: int
     payload: bytes
     fin: bool = True
+    masked: bool = False
 
 
 def compute_accept(key: str) -> str:
@@ -186,7 +187,7 @@ async def read_frame(
     if masked:
         payload = bytes(byte ^ mask_key[index % 4] for index, byte in enumerate(payload))
 
-    return Frame(opcode=opcode, payload=payload, fin=fin)
+    return Frame(opcode=opcode, payload=payload, fin=fin, masked=masked)
 
 
 # --------------------------------------------------------------------------- #
@@ -518,6 +519,12 @@ class WebSocketTransport(Transport):
             except TransportError as exc:
                 self._closed = True
                 raise TransportError(f"carrier read failed: {exc}") from exc
+
+            if frame.masked != self._server_side:
+                self._closed = True
+                peer_role = "client" if self._server_side else "server"
+                requirement = "must be masked" if self._server_side else "must not be masked"
+                raise TransportError(f"{peer_role} frames {requirement}")
 
             if frame.opcode == OP_PING:
                 await self._send_control(OP_PONG, frame.payload)

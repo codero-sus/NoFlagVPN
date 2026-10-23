@@ -892,3 +892,19 @@ async def test_sending_oversized_websocket_message_is_rejected_before_encoding()
     async with Pipe(server_side=False, max_size=8, encoding="text") as pipe:
         with pytest.raises(TransportError, match="8-byte carrier limit"):
             await pipe.transport.send_message(b"x" * 9)
+
+
+async def test_server_rejects_unmasked_client_frames():
+    async with Pipe(server_side=True) as pipe:
+        pipe.peer_writer.write(write_frame(OP_BINARY, b"unmasked"))
+        await pipe.peer_writer.drain()
+        with pytest.raises(TransportError, match="client frames must be masked"):
+            await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
+
+
+async def test_client_rejects_masked_server_frames():
+    async with Pipe(server_side=False) as pipe:
+        pipe.peer_writer.write(write_frame(OP_BINARY, b"masked", mask=True))
+        await pipe.peer_writer.drain()
+        with pytest.raises(TransportError, match="server frames must not be masked"):
+            await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
