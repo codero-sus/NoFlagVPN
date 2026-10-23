@@ -480,3 +480,18 @@ def test_membership_store_reports_invalid_utf8_as_a_configuration_error(tmp_path
     path.chmod(0o600)
     with pytest.raises(ConfigError, match="UTF-8 JSON"):
         MembershipStore.load(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("ws_path", None),
+        ("ws_path", "/cdn\r\nInjected: yes"),
+        ("server_header", "nginx\r\nX-Injected: yes"),
+        ("server_header", 42),
+        ("listen_host", ""),
+    ],
+)
+def test_relay_http_settings_reject_invalid_types_and_header_injection(field, value):
+    with pytest.raises(ConfigError, match=field):
+        ServerConfig.from_mapping({field: value})
