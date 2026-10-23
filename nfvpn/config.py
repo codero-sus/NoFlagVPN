@@ -259,8 +259,17 @@ class ServerConfig:
                 f"unknown shaping profile {self.profile!r}; expected one of "
                 f"{', '.join(profile_names())}"
             )
-        if not self.ws_path.startswith("/"):
-            raise ConfigError("ws_path must start with '/'")
+        if not isinstance(self.ws_path, str) or not self.ws_path.startswith("/"):
+            raise ConfigError("ws_path must be a string starting with '/'")
+        if any(char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F for char in self.ws_path):
+            raise ConfigError("ws_path must not contain whitespace or control characters")
+        if self.server_header is not None:
+            if not isinstance(self.server_header, str):
+                raise ConfigError("server_header must be a string or null")
+            if any(ord(char) < 0x20 or ord(char) > 0x7E for char in self.server_header):
+                raise ConfigError("server_header must contain printable ASCII only")
+        if not isinstance(self.listen_host, str) or not self.listen_host:
+            raise ConfigError("listen_host must be a non-empty string")
         if not isinstance(self.egress, EgressPolicy):
             # Without this, a bad egress only explodes later inside asdict()
             # with a dataclasses TypeError, far from whoever set it.
