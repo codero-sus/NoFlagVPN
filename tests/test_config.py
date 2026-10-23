@@ -420,3 +420,23 @@ def test_config_mapping_entrypoints_reject_non_object_values():
         ServerConfig.from_mapping([])  # type: ignore[arg-type]
     with pytest.raises(ConfigError, match="client config must be a JSON object"):
         ClientConfig.from_mapping([])  # type: ignore[arg-type]
+
+
+def test_identity_file_must_be_a_json_object(tmp_path):
+    path = tmp_path / "identity.key"
+    path.write_text("[]")
+    path.chmod(0o600)
+    with pytest.raises(ConfigError, match="identity file must be a JSON object"):
+        Identity.load(path)
+
+
+@pytest.mark.parametrize("created_at", ["yesterday", float("nan"), float("inf")])
+def test_identity_file_rejects_invalid_creation_timestamps(tmp_path, created_at):
+    path = tmp_path / "identity.key"
+    Identity.generate("relay").save(path)
+    payload = json.loads(path.read_text())
+    payload["created_at"] = created_at
+    path.write_text(json.dumps(payload))
+    path.chmod(0o600)
+    with pytest.raises(ConfigError, match="created_at"):
+        Identity.load(path)
