@@ -440,3 +440,40 @@ def test_identity_file_rejects_invalid_creation_timestamps(tmp_path, created_at)
     path.chmod(0o600)
     with pytest.raises(ConfigError, match="created_at"):
         Identity.load(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("added_at", float("nan")),
+        ("added_at", float("inf")),
+        ("expires_at", float("nan")),
+        ("expires_at", float("inf")),
+    ],
+)
+def test_members_reject_non_finite_timestamps(field, value):
+    payload = Member("peer", bytes(32), bytes(32)).to_dict()
+    payload[field] = value
+    with pytest.raises(ConfigError, match=field):
+        Member.from_dict(payload)
+
+
+def test_members_preserve_unix_epoch_added_timestamp():
+    payload = Member("peer", bytes(32), bytes(32)).to_dict()
+    payload["added_at"] = 0
+    assert Member.from_dict(payload).added_at == 0
+
+
+def test_json_config_reports_invalid_utf8_as_a_configuration_error(tmp_path):
+    path = tmp_path / "invalid.json"
+    path.write_bytes(b"\xff\xfe")
+    with pytest.raises(ConfigError, match="UTF-8 JSON"):
+        load_json(path)
+
+
+def test_membership_store_reports_invalid_utf8_as_a_configuration_error(tmp_path):
+    path = tmp_path / "invalid-members.json"
+    path.write_bytes(b"\xff\xfe")
+    path.chmod(0o600)
+    with pytest.raises(ConfigError, match="UTF-8 JSON"):
+        MembershipStore.load(path)
