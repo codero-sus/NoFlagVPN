@@ -257,6 +257,18 @@ class Member:
             raise ConfigError("member public key must be 32 bytes")
         if len(self.psk) != _PSK_SIZE:
             raise ConfigError(f"member PSK must be {_PSK_SIZE} bytes")
+        if (
+            isinstance(self.added_at, bool)
+            or not isinstance(self.added_at, (int, float))
+            or not math.isfinite(self.added_at)
+        ):
+            raise ConfigError("member added_at must be a finite timestamp")
+        if self.expires_at is not None and (
+            isinstance(self.expires_at, bool)
+            or not isinstance(self.expires_at, (int, float))
+            or not math.isfinite(self.expires_at)
+        ):
+            raise ConfigError("member expires_at must be a finite timestamp")
 
     @property
     def fingerprint(self) -> str:
@@ -295,7 +307,9 @@ class Member:
                 name=str(raw["name"]),
                 public_key=b64d(str(raw["public_key"])),
                 psk=b64d(str(raw["psk"])),
-                added_at=float(raw.get("added_at") or time.time()),
+                added_at=(
+                    float(raw["added_at"]) if raw.get("added_at") is not None else time.time()
+                ),
                 expires_at=(
                     float(raw["expires_at"]) if raw.get("expires_at") is not None else None
                 ),
@@ -396,8 +410,8 @@ class MembershipStore:
             return cls(path=store_path)
         try:
             raw = json.loads(store_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise ConfigError(f"membership file is not valid JSON: {store_path}") from exc
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ConfigError(f"membership file is not valid UTF-8 JSON: {store_path}") from exc
 
         mode = store_path.stat().st_mode
         if mode & (stat.S_IRWXG | stat.S_IRWXO):

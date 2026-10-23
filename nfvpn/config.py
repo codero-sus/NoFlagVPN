@@ -160,8 +160,8 @@ def load_json(path: os.PathLike[str] | str) -> dict[str, Any]:
         return {}
     try:
         data = json.loads(file_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ConfigError(f"{file_path} is not valid JSON: {exc}") from exc
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ConfigError(f"{file_path} is not valid UTF-8 JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise ConfigError(f"{file_path} must contain a JSON object")
     return data
