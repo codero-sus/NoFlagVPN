@@ -58,3 +58,20 @@ async def test_a_close_timeout_is_suppressed_and_not_retried():
     assert writer.close_calls == 1
     await transport.close()
     assert writer.close_calls == 1
+
+
+async def test_a_send_waiting_during_close_cannot_write_after_shutdown():
+    writer = FakeWriter()
+    transport = make_transport(writer)
+    await transport._write_lock.acquire()
+    send_task = asyncio.create_task(transport.send_message(b"late payload"))
+    await asyncio.sleep(0)
+    close_task = asyncio.create_task(transport.close())
+    await asyncio.sleep(0)
+    assert transport.is_open is False
+    transport._write_lock.release()
+    with pytest.raises(TransportError, match="carrier is closed"):
+        await send_task
+    await close_task
+    assert writer.writes == []
+    assert writer.close_calls == 1

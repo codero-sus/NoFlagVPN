@@ -927,3 +927,20 @@ async def test_client_rejects_an_oversized_upgrade_response():
     async with fake_server(response) as server:
         with pytest.raises(TransportError, match="response headers exceed"):
             await client_handshake(server.port, max_header_bytes=128)
+
+
+async def test_a_send_waiting_during_close_cannot_write_after_shutdown():
+    async with Pipe(server_side=True) as pipe:
+        await pipe.transport._write_lock.acquire()
+        send_task = asyncio.create_task(pipe.transport.send_message(b"late payload"))
+        await asyncio.sleep(0)
+        close_task = asyncio.create_task(pipe.transport.close())
+        await asyncio.sleep(0)
+        assert pipe.transport.is_open is False
+        pipe.transport._write_lock.release()
+        with pytest.raises(TransportError, match="carrier is closed"):
+            await send_task
+        await close_task
+        close_frame = await asyncio.wait_for(read_frame(pipe.peer_reader), timeout=5)
+        assert close_frame.opcode == OP_CLOSE
+        assert await asyncio.wait_for(pipe.peer_reader.read(), timeout=5) == b""
