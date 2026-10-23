@@ -846,3 +846,49 @@ async def test_raw_explicit_close_still_releases_writer_after_a_receive_error():
         assert pipe.transport._writer.is_closing() is True, "an errored transport must release its writer"
         await pipe.transport.close()
         assert pipe.transport._writer.is_closing() is True
+
+
+async def test_text_mode_reassembles_before_decoding_fragmented_base64():
+    async with Pipe(server_side=True, encoding="text") as pipe:
+        encoded = base64.b64encode(b"fragmented secret")
+        pipe.peer_writer.write(write_frame(OP_TEXT, encoded[:3], mask=True, fin=False))
+        pipe.peer_writer.write(
+            write_frame(OP_CONTINUATION, encoded[3:8], mask=True, fin=False)
+        )
+        pipe.peer_writer.write(
+            write_frame(OP_CONTINUATION, encoded[8:], mask=True, fin=True)
+        )
+        await pipe.peer_writer.drain()
+        assert await asyncio.wait_for(pipe.transport.receive_message(), timeout=5) == b"fragmented secret"
+
+
+async def test_fragmented_wrong_encoding_is_skipped_without_killing_carrier():
+    async with Pipe(server_side=True, encoding="binary") as pipe:
+        pipe.peer_writer.write(write_frame(OP_TEXT, b"<html>", mask=True, fin=False))
+        pipe.peer_writer.write(write_frame(OP_CONTINUATION, b"noise</html>", mask=True))
+        pipe.peer_writer.write(write_frame(OP_BINARY, b"real message", mask=True))
+        await pipe.peer_writer.drain()
+        assert await asyncio.wait_for(pipe.transport.receive_message(), timeout=5) == b"real message"
+
+
+async def test_oversized_declared_frame_is_rejected_before_reading_its_body():
+    async with Pipe(server_side=True, max_size=16) as pipe:
+        pipe.peer_writer.write(b"\x82\x7f" + struct.pack(">Q", 1 << 30))
+        await pipe.peer_writer.drain()
+        with pytest.raises(TransportError, match="16-byte carrier limit"):
+            await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
+
+
+async def test_fragmented_message_size_is_bounded_while_receiving():
+    async with Pipe(server_side=True, max_size=4) as pipe:
+        pipe.peer_writer.write(write_frame(OP_BINARY, b"123", mask=True, fin=False))
+        pipe.peer_writer.write(write_frame(OP_CONTINUATION, b"45", mask=True))
+        await pipe.peer_writer.drain()
+        with pytest.raises(TransportError, match="4-byte carrier limit"):
+            await asyncio.wait_for(pipe.transport.receive_message(), timeout=5)
+
+
+async def test_sending_oversized_websocket_message_is_rejected_before_encoding():
+    async with Pipe(server_side=False, max_size=8, encoding="text") as pipe:
+        with pytest.raises(TransportError, match="8-byte carrier limit"):
+            await pipe.transport.send_message(b"x" * 9)
