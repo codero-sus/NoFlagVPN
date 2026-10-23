@@ -50,6 +50,13 @@ def _nonce(counter: int) -> bytes:
     """Deterministic 96-bit nonce: little-endian counter plus four zero bytes."""
     return counter.to_bytes(8, "little") + b"\x00\x00\x00\x00"
 
+def _unsigned(value: int, bits: int, label: str) -> int:
+    """Validate a value before packing it into an unsigned wire integer."""
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value < (1 << bits):
+        raise ProtocolError(f"{label} must fit in an unsigned {bits}-bit integer")
+    return value
+
+
 
 @dataclass(frozen=True)
 class RecordHeader:
@@ -61,10 +68,21 @@ class RecordHeader:
     counter: int
 
     def pack(self) -> bytes:
-        return _HEADER.pack(int(self.type), self.flags, 0, self.stream_id, self.counter)
+        if isinstance(self.type, bool) or not isinstance(self.type, int):
+            raise ProtocolError("record type must be a RecordType value")
+        try:
+            record_type = RecordType(self.type)
+        except ValueError as exc:
+            raise ProtocolError(f"unknown record type {self.type}") from exc
+        flags = _unsigned(self.flags, 8, "record flags")
+        stream_id = _unsigned(self.stream_id, 32, "stream id")
+        counter = _unsigned(self.counter, 64, "record counter")
+        return _HEADER.pack(int(record_type), flags, 0, stream_id, counter)
 
     @classmethod
     def unpack(cls, raw: bytes) -> RecordHeader:
+        if len(raw) != HEADER_SIZE:
+            raise ProtocolError(f"record header must be {HEADER_SIZE} bytes, got {len(raw)}")
         type_code, flags, reserved, stream_id, counter = _HEADER.unpack(raw)
         try:
             record_type = RecordType(type_code)
@@ -114,6 +132,8 @@ class FrameWriter:
             raise ProtocolError(
                 f"payload of {len(payload)} bytes exceeds the {MAX_PAYLOAD}-byte limit"
             )
+        if isinstance(self.counter, bool) or not isinstance(self.counter, int) or self.counter < 0:
+            raise ProtocolError("record counter cannot be negative or non-integral")
         if self.counter > _MAX_COUNTER:
             raise ProtocolError("record counter exhausted; rekey required")
 
