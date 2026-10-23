@@ -533,3 +533,91 @@ async def test_the_statistics_add_up():
     assert stream.bytes_received == 5
     assert multiplexer.stream_count == 1
     assert [item.stream_id for item in multiplexer] == [stream_id]
+
+
+async def test_peer_cannot_queue_more_data_than_the_receive_window():
+    multiplexer, _channel = mux(window=4)
+    stream = Stream(stream_id=2, request=OpenRequest("host", 80), window=4, _mux=multiplexer)
+    multiplexer._streams[2] = stream
+    await multiplexer.handle_record(record(RecordType.DATA, 2, b"1234"))
+    with pytest.raises(ProtocolError, match="flow-control window"):
+        await multiplexer.handle_record(record(RecordType.DATA, 2, b"5"))
+    assert stream.buffered == 1
+    assert stream._recv_credit == 0
+
+
+async def test_empty_data_records_cannot_bypass_byte_flow_control():
+    multiplexer, _channel = mux()
+    stream = Stream(stream_id=2, request=OpenRequest("host", 80), _mux=multiplexer)
+    multiplexer._streams[2] = stream
+    with pytest.raises(ProtocolError, match="empty DATA"):
+        await multiplexer.handle_record(record(RecordType.DATA, 2, b""))
+    assert stream.buffered == 0
+
+
+async def test_peer_cannot_grant_more_than_the_original_window():
+    multiplexer, _channel = mux(window=4)
+    stream = Stream(stream_id=2, request=OpenRequest("host", 80), window=4, _mux=multiplexer)
+    multiplexer._streams[2] = stream
+    with pytest.raises(ProtocolError, match="more stream credit"):
+        await multiplexer.handle_record(
+            record(RecordType.CTRL, 2, control(CTRL_WINDOW, pack_window(5)))
+        )
+
+
+async def test_zero_window_updates_are_protocol_errors():
+    multiplexer, _channel = mux(window=4)
+    stream = Stream(stream_id=2, request=OpenRequest("host", 80), window=4, _mux=multiplexer)
+    multiplexer._streams[2] = stream
+    with pytest.raises(ProtocolError, match="credit must be positive"):
+        await multiplexer.handle_record(
+            record(RecordType.CTRL, 2, control(CTRL_WINDOW, pack_window(0)))
+        )
+
+
+async def test_closing_a_stream_wakes_a_sender_waiting_for_credit():
+    multiplexer, _channel = mux(window=4)
+    stream = Stream(stream_id=2, request=OpenRequest("host", 80), window=4, _mux=multiplexer)
+    multiplexer._streams[2] = stream
+    await stream.send(b"full")
+    pending = asyncio.create_task(stream.send(b"more"))
+    await asyncio.sleep(0)
+    await stream.close(CloseReason.NORMAL)
+    with pytest.raises(StreamClosedError):
+        await asyncio.wait_for(pending, timeout=1)
+
+
+async def test_concurrent_sends_do_not_spend_the_same_stream_credit_twice():
+    class PausingChannel(FakeChannel):
+        def __init__(self):
+            super().__init__()
+            self.data_started = asyncio.Event()
+            self.release_data = asyncio.Event()
+
+        async def send(self, record_type, stream_id, payload=b"", **kwargs):
+            if record_type is RecordType.DATA:
+                self.data_started.set()
+                await self.release_data.wait()
+            await super().send(record_type, stream_id, payload, **kwargs)
+
+    multiplexer, _ = mux(window=4)
+    channel = PausingChannel()
+    multiplexer.channel = channel
+    stream = Stream(stream_id=2, request=OpenRequest("host", 80), window=4, _mux=multiplexer)
+    multiplexer._streams[2] = stream
+
+    first = asyncio.create_task(stream.send(b"1111"))
+    await channel.data_started.wait()
+    second = asyncio.create_task(stream.send(b"2222"))
+    await asyncio.sleep(0)
+    assert stream.credits == 0
+    assert not second.done()
+
+    channel.release_data.set()
+    await first
+    assert channel.data() == [(2, b"1111")]
+    await multiplexer.handle_record(
+        record(RecordType.CTRL, 2, control(CTRL_WINDOW, pack_window(4)))
+    )
+    await second
+    assert channel.data() == [(2, b"1111"), (2, b"2222")]
