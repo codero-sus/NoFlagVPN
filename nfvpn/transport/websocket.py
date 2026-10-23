@@ -125,11 +125,13 @@ def write_frame(opcode: int, payload: bytes = b"", *, mask: bool = False, fin: b
     return bytes(header) + key + masked
 
 
-async def read_frame(reader: asyncio.StreamReader) -> Frame:
-    """Read one WebSocket frame.
+async def read_frame(
+    reader: asyncio.StreamReader, *, max_payload_size: int | None = None
+) -> Frame:
+    """Read one WebSocket frame, optionally bounding its payload before allocation.
 
     Raises:
-        TransportError: connection closed mid-frame, or a malformed frame.
+        TransportError: connection closed mid-frame, or a malformed/oversized frame.
     """
     try:
         head = await reader.readexactly(2)
@@ -162,6 +164,12 @@ async def read_frame(reader: asyncio.StreamReader) -> Frame:
             raise TransportError("truncated 64-bit frame length") from exc
         if length & (1 << 63):
             raise TransportError("frame length with the high bit set is ill-formed")
+
+    if max_payload_size is not None and length > max_payload_size:
+        raise TransportError(
+            f"frame payload of {length} bytes exceeds the "
+            f"{max_payload_size}-byte carrier limit"
+        )
 
     mask_key = b""
     if masked:
@@ -423,6 +431,7 @@ class WebSocketTransport(Transport):
         self._server_header = server_header
         self._write_lock = asyncio.Lock()
         self._fragments: list[bytes] = []
+        self._fragment_size = 0
         self._fragment_opcode: int | None = None
         self.response_headers: dict[str, str] = {}
 
@@ -476,6 +485,11 @@ class WebSocketTransport(Transport):
         """Send one application message (binary frame, or base64 text frame)."""
         if self._closed:
             raise TransportError("carrier is closed")
+        if len(payload) > self._max_message_size:
+            raise TransportError(
+                f"message of {len(payload)} bytes exceeds the "
+                f"{self._max_message_size}-byte carrier limit"
+            )
         if self._encoding == PayloadEncoding.TEXT:
             opcode, body = OP_TEXT, base64.b64encode(payload)
         else:
@@ -495,9 +509,12 @@ class WebSocketTransport(Transport):
         """Return the next application message, transparently handling control frames."""
         if self._closed:
             raise TransportError("carrier is closed")
+        frame_limit = self._max_message_size
+        if self._encoding == PayloadEncoding.TEXT:
+            frame_limit = 4 * ((self._max_message_size + 2) // 3)
         while True:
             try:
-                frame = await read_frame(self._reader)
+                frame = await read_frame(self._reader, max_payload_size=frame_limit)
             except TransportError as exc:
                 self._closed = True
                 raise TransportError(f"carrier read failed: {exc}") from exc
@@ -511,42 +528,54 @@ class WebSocketTransport(Transport):
                 await self._send_control(OP_CLOSE, frame.payload[:2])
                 self._closed = True
                 raise TransportError("peer closed the carrier")
-            if frame.opcode == OP_TEXT:
+
+            if frame.opcode in (OP_TEXT, OP_BINARY):
+                if self._fragment_opcode is not None:
+                    raise TransportError("new data frame received before fragmented message completed")
+                if frame.fin:
+                    message_opcode = frame.opcode
+                    wire_message = frame.payload
+                else:
+                    self._fragment_opcode = frame.opcode
+                    self._fragments = [frame.payload]
+                    self._fragment_size = len(frame.payload)
+                    if self._fragment_size > frame_limit:
+                        raise TransportError(
+                            f"message exceeds the {self._max_message_size}-byte carrier limit"
+                        )
+                    continue
+            elif frame.opcode == OP_CONTINUATION:
+                if self._fragment_opcode is None:
+                    raise TransportError("continuation frame without a start")
+                self._fragments.append(frame.payload)
+                self._fragment_size += len(frame.payload)
+                if self._fragment_size > frame_limit:
+                    raise TransportError(
+                        f"message exceeds the {self._max_message_size}-byte carrier limit"
+                    )
+                if not frame.fin:
+                    continue
+                message_opcode = self._fragment_opcode
+                wire_message = b"".join(self._fragments)
+                self._fragments = []
+                self._fragment_size = 0
+                self._fragment_opcode = None
+            else:
+                raise TransportError(f"unsupported opcode 0x{frame.opcode:x}")
+
+            if message_opcode == OP_TEXT:
                 if self._encoding != PayloadEncoding.TEXT:
                     # A text message we did not expect: treat it as noise rather
                     # than a protocol error, since a real site may send any HTML.
                     continue
                 try:
-                    message = base64.b64decode(frame.payload, validate=True)
+                    message = base64.b64decode(wire_message, validate=True)
                 except (binascii.Error, ValueError) as exc:
                     raise TransportError("malformed base64 text message") from exc
-            elif frame.opcode == OP_BINARY:
-                if self._encoding == PayloadEncoding.TEXT:
-                    continue
-                message = frame.payload
-            elif frame.opcode == OP_CONTINUATION:
-                if self._fragment_opcode is None:
-                    raise TransportError("continuation frame without a start")
-                self._fragments.append(frame.payload)
+            elif self._encoding == PayloadEncoding.TEXT:
+                continue
             else:
-                raise TransportError(f"unsupported opcode 0x{frame.opcode:x}")
-
-            if frame.opcode in (OP_TEXT, OP_BINARY):
-                if not frame.fin:
-                    self._fragments = [message]
-                    self._fragment_opcode = frame.opcode
-                    continue
-            else:
-                message = b"".join(self._fragments)
-                if not frame.fin:
-                    # A message still arriving: keep the marker that says so.
-                    # Clearing it here made every fragment after the second look
-                    # like a continuation with no start, so a message split into
-                    # three frames was rejected and the carrier died.
-                    self._fragments = [message]
-                    continue
-                self._fragments = []
-                self._fragment_opcode = None
+                message = wire_message
 
             if len(message) > self._max_message_size:
                 raise TransportError(
