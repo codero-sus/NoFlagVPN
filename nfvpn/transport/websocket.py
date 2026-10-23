@@ -538,6 +538,8 @@ class WebSocketTransport(Transport):
         frame = write_frame(opcode, body, mask=not self._server_side)
         try:
             async with self._write_lock:
+                if self._closed:
+                    raise TransportError("carrier is closed")
                 self._writer.write(frame)
                 await self._writer.drain()
         except (ConnectionError, OSError, RuntimeError) as exc:

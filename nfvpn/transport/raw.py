@@ -58,8 +58,9 @@ class RawTCPTransport(Transport):
                 return
             self._closed = True
             try:
-                self._writer.close()
-                await asyncio.wait_for(self._writer.wait_closed(), timeout=5)
+                async with self._write_lock:
+                    self._writer.close()
+                    await asyncio.wait_for(self._writer.wait_closed(), timeout=5)
             except (ConnectionError, OSError, RuntimeError, asyncio.TimeoutError):
                 pass
             finally:
@@ -75,6 +76,8 @@ class RawTCPTransport(Transport):
         frame = _LENGTH.pack(len(payload)) + payload
         try:
             async with self._write_lock:
+                if self._closed:
+                    raise TransportError("carrier is closed")
                 self._writer.write(frame)
                 await self._writer.drain()
         except (ConnectionError, OSError, RuntimeError) as exc:
