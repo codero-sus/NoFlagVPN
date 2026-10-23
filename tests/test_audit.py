@@ -8,6 +8,7 @@ numbers in the facts block, which are computed rather than measured.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import random
 import stat
@@ -262,11 +263,20 @@ def test_a_profile_with_one_size_class_is_warned_about(monkeypatch):
 # the benchmark and the command
 # --------------------------------------------------------------------------- #
 def test_the_backend_benchmark_measures_and_restores_the_backend():
-    results = benchmark_backends(payload_size=1 << 12, rounds=2)
-    assert results["active"] in ("pure", "cryptography")
-    assert results["python"]
-    assert results["pure_mb_per_second"] > 0
-    assert backend_name() == "pure", "the doctor must not change how the process encrypts"
+    from nfvpn.core import primitives
+
+    original = backend_name()
+    try:
+        with contextlib.suppress(Exception):
+            primitives.use_backend("cryptography")  # optional in minimal installs
+        selected = backend_name()
+        results = benchmark_backends(payload_size=1 << 12, rounds=2)
+        assert results["active"] == selected
+        assert results["python"]
+        assert results["pure_mb_per_second"] > 0
+        assert backend_name() == selected, "doctor must preserve the active backend"
+    finally:
+        primitives.use_backend(original)
 
 
 def test_doctor_is_clean_on_a_fresh_machine(tmp_path, monkeypatch, capsys):

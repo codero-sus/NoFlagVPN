@@ -83,23 +83,26 @@ def benchmark_backends(payload_size: int = 1 << 16, rounds: int = 8) -> dict:
     """Time the available AEAD backends on a realistic payload size."""
     from nfvpn.core import primitives
 
-    results: dict = {"active": backend_name(), "python": sys.version.split()[0]}
+    original_backend = backend_name()
+    results: dict = {"active": original_backend, "python": sys.version.split()[0]}
     payload = bytes(payload_size)
     key = bytes(range(32))
     nonce = b"\x00" * 12
-    for name in ("pure", "cryptography"):
-        try:
-            primitives.use_backend(name)
-        except Exception:
-            continue
-        start = time.perf_counter()
-        for _ in range(rounds):
-            primitives.seal(key, nonce, payload, b"")
-        elapsed = time.perf_counter() - start
-        if elapsed <= 0:  # pragma: no cover - clock resolution
-            continue
-        results[f"{name}_mb_per_second"] = round(payload_size * rounds / elapsed / 1e6, 2)
-    primitives.use_backend("pure")
+    try:
+        for name in ("pure", "cryptography"):
+            try:
+                primitives.use_backend(name)
+            except Exception:
+                continue
+            start = time.perf_counter()
+            for _ in range(rounds):
+                primitives.seal(key, nonce, payload, b"")
+            elapsed = time.perf_counter() - start
+            if elapsed <= 0:  # pragma: no cover - clock resolution
+                continue
+            results[f"{name}_mb_per_second"] = round(payload_size * rounds / elapsed / 1e6, 2)
+    finally:
+        primitives.use_backend(original_backend)
     return results
 
 
