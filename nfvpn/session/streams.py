@@ -139,6 +139,8 @@ class Stream:
 
     _queue: asyncio.Queue = field(default_factory=asyncio.Queue, repr=False)
     _credits: int = 0
+    _recv_credit: int = 0
+    _send_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _credit_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     _closed: bool = False
     _eof_seen: bool = False
@@ -159,6 +161,7 @@ class Stream:
 
     def __post_init__(self) -> None:
         self._credits = self.window
+        self._recv_credit = self.window
         self._ack_threshold = max(1, self.window // 2)
         self._credit_event.set()
 
@@ -171,16 +174,19 @@ class Stream:
         """
         if self._mux is None:
             raise ProtocolError("stream is not attached to a multiplexer")
-        offset = 0
-        while offset < len(data):
-            await self._wait_for_credit()
-            if self._closed:
-                raise StreamClosedError(self.close_reason or CloseReason.LOCAL_SHUTDOWN)
-            chunk = data[offset : offset + min(MAX_PAYLOAD, self._credits)]
-            await self._mux._send_data(self.stream_id, chunk)
-            self._credits -= len(chunk)
-            self.bytes_sent += len(chunk)
-            offset += len(chunk)
+        async with self._send_lock:
+            offset = 0
+            while offset < len(data):
+                await self._wait_for_credit()
+                if self._closed:
+                    raise StreamClosedError(self.close_reason or CloseReason.LOCAL_SHUTDOWN)
+                chunk = data[offset : offset + min(MAX_PAYLOAD, self._credits)]
+                # Reserve credit before yielding to the channel writer so a
+                # second concurrent send cannot spend the same window twice.
+                self._credits -= len(chunk)
+                await self._mux._send_data(self.stream_id, chunk)
+                self.bytes_sent += len(chunk)
+                offset += len(chunk)
 
     async def receive(self) -> bytes | None:
         """Return the next chunk, or ``None`` once the far end has finished."""
@@ -194,11 +200,13 @@ class Stream:
         if self._mux is not None:
             self._consumed_since_ack += len(item)
             if self._consumed_since_ack >= self._ack_threshold:
+                credit = self._consumed_since_ack
+                self._consumed_since_ack = 0
+                self._recv_credit += credit
                 with contextlib.suppress(TransportError, NoFlagVPNError):
                     await self._mux._send_control(
-                        CTRL_WINDOW, self.stream_id, pack_window(self._consumed_since_ack)
+                        CTRL_WINDOW, self.stream_id, pack_window(credit)
                     )
-                self._consumed_since_ack = 0
         return item
 
     async def close(self, reason: CloseReason = CloseReason.NORMAL) -> None:
@@ -207,22 +215,34 @@ class Stream:
             return
         self._closed = True
         self.close_reason = reason
+        self._credit_event.set()
         self._queue.put_nowait(_EOF)
         if self._mux is not None:
             with contextlib.suppress(TransportError, NoFlagVPNError):
                 await self._mux._send_control(CTRL_CLOSE, self.stream_id, pack_close(reason))
 
     # -- multiplexer callbacks --------------------------------------------
-    def _deliver(self, chunk: bytes) -> None:
-        if not self._closed:
-            self._queue.put_nowait(chunk)
-
     def _deliver_eof(self, reason: CloseReason) -> None:
         self._closed = True
         self.close_reason = reason
+        self._credit_event.set()
         self._queue.put_nowait(_EOF)
 
+    def _deliver(self, chunk: bytes) -> None:
+        if self._closed:
+            return
+        if not chunk:
+            raise ProtocolError("empty DATA records are not allowed")
+        if len(chunk) > self._recv_credit:
+            raise ProtocolError("peer exceeded the stream flow-control window")
+        self._recv_credit -= len(chunk)
+        self._queue.put_nowait(chunk)
+
     def _grant(self, credits: int) -> None:
+        if credits <= 0:
+            raise ProtocolError("WINDOW credit must be positive")
+        if self._credits + credits > self.window:
+            raise ProtocolError("peer granted more stream credit than the configured window")
         self._credits += credits
         self._credit_event.set()
 
