@@ -23,12 +23,12 @@ from pathlib import Path
 
 from nfvpn.errors import ConfigError
 
-__all__ = ["client_context", "server_context"]
+__all__ = ["DEFAULT_ALPN", "SERVER_ALPN", "client_context", "server_context"]
 
-#: ALPN order that matches a browser talking to a normal HTTPS server.  Offering
-#: nothing unusual here matters: an odd ALPN list is a trivially observable
-#: fingerprint for a passive observer that logs ClientHellos.
+#: Client offer order used by browsers. The server side selects only HTTP/1.1
+#: because this relay does not implement HTTP/2 (RFC 8441 extended CONNECT).
 DEFAULT_ALPN = ("h2", "http/1.1")
+SERVER_ALPN = ("http/1.1",)
 
 
 def client_context(
@@ -67,9 +67,11 @@ def server_context(
     *,
     cert_file: str | Path | None,
     key_file: str | Path | None,
-    alpn: tuple[str, ...] = DEFAULT_ALPN,
+    alpn: tuple[str, ...] = SERVER_ALPN,
 ) -> ssl.SSLContext | None:
-    """Build the server-side TLS context, or ``None`` if TLS was not configured."""
+    """Build a server TLS context for the HTTP versions this relay implements."""
+    if "h2" in alpn:
+        raise ConfigError("the relay does not implement HTTP/2; server ALPN cannot include 'h2'")
     if not cert_file and not key_file:
         return None
     if not cert_file or not key_file:
