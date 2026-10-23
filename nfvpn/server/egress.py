@@ -140,14 +140,16 @@ class EgressPolicy:
         self._deny_nets = tuple(_network(item, "deny_networks") for item in deny_specs)
 
         for port in (*self.allow_ports, *self.deny_ports):
-            if not 1 <= int(port) <= 65535:
+            if isinstance(port, bool) or not isinstance(port, int):
+                raise ConfigError(f"{port!r} is not an integer TCP port")
+            if not 1 <= port <= 65535:
                 raise ConfigError(
                     f"{port} is not a valid TCP port; ports run from 1 to 65535"
                 )
 
     # -- individual checks -------------------------------------------------
     def port_allowed(self, port: int) -> tuple[bool, str]:
-        if not 1 <= port <= 65535:
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
             return False, f"port {port} is not a valid TCP port"
         if port in self.deny_ports:
             return False, "port is on the deny list"

@@ -411,6 +411,9 @@ def test_non_numeric_client_timeout_is_a_config_error():
 def test_bad_egress_numeric_settings_are_config_errors():
     with pytest.raises(ConfigError, match="list of int"):
         ServerConfig.from_mapping({"egress": {"allow_ports": ["not-a-port"]}})
+    for invalid_port in (True, 443.9):
+        with pytest.raises(ConfigError, match="list of int"):
+            ServerConfig.from_mapping({"egress": {"allow_ports": [invalid_port]}})
     with pytest.raises(ConfigError, match="resolve_timeout"):
         ServerConfig.from_mapping({"egress": {"resolve_timeout": "soon"}})
 

@@ -85,6 +85,17 @@ def test_deny_beats_allow_for_ports():
     assert policy.port_allowed(443)[0] is True
 
 
+@pytest.mark.parametrize("port", [True, 443.9, "443"])
+def test_policy_rejects_non_integer_port_rules(port):
+    with pytest.raises(ConfigError, match="integer TCP port"):
+        EgressPolicy(allow_ports=(port,))  # type: ignore[arg-type]
+
+
+def test_policy_refuses_non_integer_port_requests():
+    assert EgressPolicy().port_allowed(True)[0] is False
+    assert EgressPolicy().port_allowed(443.0)[0] is False  # type: ignore[arg-type]
+
+
 def test_deny_beats_allow_for_networks():
     """An explicit deny wins over the allow list.
 
