@@ -42,6 +42,7 @@ from nfvpn.errors import (
 )
 from nfvpn.server.egress import EgressPolicy
 from nfvpn.server.relay import Relay
+from nfvpn.setup import initialize_server
 from nfvpn.tokens import Invite, decode_invite
 from nfvpn.traffic import profile_names
 from nfvpn.version import __version__
@@ -50,6 +51,7 @@ __all__ = [
     "cmd_connect",
     "cmd_demo",
     "cmd_doctor",
+    "cmd_init",
     "cmd_keygen",
     "cmd_member",
     "cmd_probe",
@@ -128,8 +130,33 @@ def _install_signals(loop, *, on_stop, on_reload=None) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# keygen / token / member
+# init / keygen / token / member
 # --------------------------------------------------------------------------- #
+def cmd_init(args) -> int:
+    """Initialize a local-only relay config, key and closed membership list."""
+    setup = initialize_server(args.config)
+    result = {
+        "config": str(setup.config_path),
+        "identity_file": str(setup.identity_path),
+        "membership_file": str(setup.membership_path),
+        "relay_public_key": setup.public_key,
+        "listen": "127.0.0.1:8443",
+        "tls": False,
+        "members": 0,
+    }
+    if args.json:
+        _as_json(result)
+        return EXIT_OK
+
+    _print(f"created config       {setup.config_path}")
+    _print(f"created relay key    {setup.identity_path} (private; do not share)")
+    _print(f"relay public key     {setup.public_key}")
+    _print(f"created allowlist    {setup.membership_path} (empty; closed by default)")
+    _print("listening locally    127.0.0.1:8443 (no TLS; not exposed to the network)")
+    _print("Edit config.json and configure TLS before exposing this relay publicly.")
+    return EXIT_OK
+
+
 def cmd_keygen(args) -> int:
     """Create a long-term identity, and optionally a pre-shared key.
 

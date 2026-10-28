@@ -33,6 +33,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"nfvpn {__version__}")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # -- init --------------------------------------------------------------
+    init = subparsers.add_parser("init", help="create a safe, local-only relay setup")
+    init.add_argument("--config", default="config.json", help="where to write the relay config")
+    init.add_argument("--json", action="store_true", help="print created paths as JSON")
+    init.set_defaults(func=commands.cmd_init)
+
     # -- keygen ------------------------------------------------------------
     keygen = subparsers.add_parser("keygen", help="create this machine's long-term identity")
     keygen.add_argument(

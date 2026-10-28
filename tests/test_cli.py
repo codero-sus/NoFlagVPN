@@ -8,10 +8,14 @@ exit codes are the ones a shell would see.
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 from nfvpn.cli.main import build_parser, main
+from nfvpn.config import ServerConfig
 from nfvpn.core.encoding import b64d, fingerprint
+from nfvpn.core.keys import Identity, MembershipStore
 from nfvpn.tokens import decode_invite
 
 
@@ -43,6 +47,37 @@ def run_json(capsys, *argv: str) -> dict:
     return json.loads(run_ok(capsys, *argv))
 
 
+def test_init_creates_safe_config_identity_and_empty_membership(capsys, tmp_path):
+    config_path = tmp_path / "config.json"
+    result = run_json(capsys, "init", "--config", str(config_path), "--json")
+
+    config = ServerConfig.load(config_path)
+    identity_path = Path(result["identity_file"])
+    membership_path = Path(result["membership_file"])
+    identity = Identity.load(identity_path)
+    membership = MembershipStore.load(membership_path)
+
+    assert config.listen_host == "127.0.0.1"
+    assert config.tls_cert is None and config.tls_key is None
+    assert identity.public_dict()["public_key"] == result["relay_public_key"]
+    assert len(membership) == 0
+    assert config_path.is_file() and identity_path.is_file() and membership_path.is_file()
+    if os.name != "nt":
+        assert identity_path.stat().st_mode & 0o077 == 0
+        assert membership_path.stat().st_mode & 0o077 == 0
+
+
+def test_init_refuses_to_overwrite_existing_config(capsys, tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"keep": true}\n', encoding="utf-8")
+
+    code, _out, err = run(capsys, "init", "--config", str(config_path))
+
+    assert code == 2
+    assert "config already exists" in err
+    assert config_path.read_text(encoding="utf-8") == '{"keep": true}\n'
+
+
 def test_version_prints_something_useful(capsys):
     code, out, _err = run(capsys, "version")
     assert code == 0
@@ -53,6 +88,7 @@ def test_version_prints_something_useful(capsys):
 def test_the_parser_accepts_every_documented_command():
     parser = build_parser()
     for argv in (
+        ["init"],
         ["keygen"],
         ["token", "--member", "x"],
         ["member", "list"],

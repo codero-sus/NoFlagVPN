@@ -68,21 +68,24 @@ to the GitHub Release when a `v*` tag is pushed. It also publishes `SHA256SUMS`.
 Build only on a release tag after the change is merged; the native executable is
 unsigned, so Windows SmartScreen or macOS Gatekeeper may show an origin warning.
 
-The repository includes a starter `config.json` in its root. The native
-executable and zipapp read `./config.json` by default; pass `--config PATH` to
-select another file:
+The repository includes a safe starter `config.json`. If it is missing, the
+native executable and zipapp automatically run the equivalent of
+`nfvpn init --config config.json` on first launch: they create the config, a
+private relay identity, and an empty (closed) membership list, then start the
+relay. `nfvpn init` can also be run directly. Pass `--config PATH` to use an
+explicit config instead:
 
 ```bash
-nfvpn-mini-server
+nfvpn init                   # create config.json and private relay state
+nfvpn-mini-server            # first run initializes config.json if absent
 # or, for the zipapp:
 ./dist/nfvpn-mini-server.pyz
 ```
 
-The starter config binds all interfaces and references TLS certificate, private
-key, identity, and membership files. Put the real files in place, protect
-private keys and membership data, and restrict inbound traffic with your host
-firewall.
-Do not expose a relay without TLS and an explicit egress policy.
+First-run defaults bind only to `127.0.0.1`, disable TLS, and authorize no
+clients. Before exposing the relay, configure TLS, set an appropriate bind
+address, and add authorized members. Protect the generated private key and
+membership file, and restrict inbound traffic with your host firewall.
 
 ## Updating
 
@@ -144,6 +147,7 @@ make selftest     # ~30 end-to-end checks on loopback
 
 | Command | What it does |
 | --- | --- |
+| `nfvpn init` | Create a safe, local-only relay config and private state files. |
 | `nfvpn keygen` | Create this machine's long-term identity. |
 | `nfvpn token` | Print one string that carries everything a client needs. |
 | `nfvpn member {add,list,revoke,remove}` | Manage a relay's allowlist. |

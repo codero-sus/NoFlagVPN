@@ -8,17 +8,32 @@ import sys
 import zipfile
 from pathlib import Path
 
+from nfvpn.cli.main import main as cli_main
 from nfvpn.config import ServerConfig
 from nfvpn.mini_server import main as mini_server_main
 from tools.build_mini_server import build_mini_server
 
 
-def test_mini_server_defaults_to_config_json(monkeypatch):
+def test_mini_server_initializes_missing_config_before_serving(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
     calls = []
-    monkeypatch.setattr("nfvpn.mini_server.cli_main", lambda args: calls.append(args) or 0)
 
-    assert mini_server_main(["--port", "8443"]) == 0
-    assert calls == [["serve", "--config", "config.json", "--port", "8443"]]
+    def fake_cli(args):
+        calls.append(args)
+        if args[0] == "init":
+            return cli_main(args)
+        return 0
+
+    monkeypatch.setattr("nfvpn.mini_server.cli_main", fake_cli)
+
+    assert mini_server_main(["--listen", "127.0.0.1:8443"]) == 0
+    assert calls == [
+        ["init", "--config", "config.json"],
+        ["serve", "--config", "config.json", "--listen", "127.0.0.1:8443"],
+    ]
+    assert Path("config.json").is_file()
+    assert Path("data/relay.key").is_file()
+    assert Path("data/members.json").is_file()
 
 
 def test_mini_server_respects_explicit_config_path(monkeypatch):
@@ -29,11 +44,11 @@ def test_mini_server_respects_explicit_config_path(monkeypatch):
     assert calls == [["serve", "--config=server.json"]]
 
 
-def test_release_config_is_valid_and_uses_private_egress_defaults():
+def test_starter_config_is_local_only_and_uses_private_egress_defaults():
     config = ServerConfig.load(Path(__file__).parents[1] / "config.json")
-    assert config.listen_host == "0.0.0.0"
-    assert config.tls_cert == "./certs/relay.crt"
-    assert config.tls_key == "./certs/relay.key"
+    assert config.listen_host == "127.0.0.1"
+    assert config.tls_cert is None
+    assert config.tls_key is None
     assert config.egress.allow_private_literals is False
     assert config.membership_file == "./data/members.json"
 
