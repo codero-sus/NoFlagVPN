@@ -8,7 +8,9 @@ network that blocks VPNs by probing ports, it looks like the nginx box it is
 pretending to be; to one that blocks them by recognising tunnel-shaped packets,
 it looks like a browser talking to a CDN.
 
-It is pure Python 3.10+, standard library only, no build step, no wheels.
+It is pure Python 3.10+, standard library only, with no install or build step for
+normal use. An optional zipapp target creates a compact, relay-only executable
+for deployment.
 
 ```console
 $ nfvpn selftest
@@ -28,6 +30,24 @@ Add the package to your environment to get the `nfvpn` command:
 ```bash
 pip install -e .                 # or: pip install -e '.[fast]' for acceleration
 ```
+
+### Build a mini relay executable
+
+For a small deployment that only needs to run the relay, build a compressed
+Python zipapp. It bundles the NoFlagVPN package, has a relay-only command line,
+and needs no pip install on the destination host:
+
+```bash
+python3 tools/build_mini_server.py --output dist/nfvpn-mini-server.pyz
+# or: make mini-server MINI_SERVER_OUT=dist/nfvpn-mini-server.pyz
+./dist/nfvpn-mini-server.pyz --help
+./dist/nfvpn-mini-server.pyz --config relay.json
+```
+
+This is a self-executing `.pyz`, not a native machine-code binary: the target
+still needs Python 3.10+ (use `python3 dist/nfvpn-mini-server.pyz ...` if its
+platform does not launch `.pyz` files directly). The artifact is generated
+locally and is ignored by Git.
 
 ## Updating
 
@@ -93,6 +113,7 @@ make selftest     # ~30 end-to-end checks on loopback
 | `nfvpn token` | Print one string that carries everything a client needs. |
 | `nfvpn member {add,list,revoke,remove}` | Manage a relay's allowlist. |
 | `nfvpn serve` | Run the relay. |
+| `nfvpn-mini-server` | Relay-only entry point (also usable in the built zipapp). |
 | `nfvpn connect` | Run the local SOCKS5/HTTP proxy. |
 | `nfvpn probe TARGET` | Look at an endpoint the way a network scanner would. |
 | `nfvpn selftest` | Run the whole stack on loopback and check every promise. |

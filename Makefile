@@ -2,7 +2,7 @@ PY ?= python3
 VENV ?= .venv
 BIN := $(VENV)/bin
 
-.PHONY: help venv dev test lint fmt typecheck check selftest demo update clean
+.PHONY: help venv dev test lint fmt typecheck check selftest demo mini-server update clean
 
 help:
 	@echo "NoFlagVPN make targets"
@@ -12,6 +12,7 @@ help:
 	@echo "  make check      lint + typecheck + test (what CI runs)"
 	@echo "  make selftest   end-to-end loopback: server <- client <- origin, asserts no leaks"
 	@echo "  make demo       start a local demo server + client against a local origin"
+	@echo "  make mini-server build a compressed relay-only Python executable"
 	@echo "  make update     pull the latest code into this checkout (updater.py)"
 	@echo "  make clean      remove caches"
 
@@ -42,6 +43,10 @@ selftest:
 
 demo:
 	$(BIN)/python -m nfvpn demo
+
+MINI_SERVER_OUT ?= dist/nfvpn-mini-server.pyz
+mini-server:
+	$(PY) tools/build_mini_server.py --output "$(MINI_SERVER_OUT)"
 
 update:
 	$(PY) updater.py

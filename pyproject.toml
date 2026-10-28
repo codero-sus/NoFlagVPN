@@ -38,6 +38,7 @@ dev = [
 
 [project.scripts]
 nfvpn = "nfvpn.cli.main:main"
+nfvpn-mini-server = "nfvpn.mini_server:main"
 
 [project.urls]
 Homepage = "https://github.com/codero-sus/NoFlagVPN"
