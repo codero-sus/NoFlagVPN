@@ -1,0 +1,111 @@
+name: Build and publish release assets
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  python-packages:
+    name: Build source and wheel packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build wheel and source archive
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build --sdist --wheel --outdir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-python-packages
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 5
+
+  native-executables:
+    name: Build native server (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            slug: linux
+          - runner: windows-latest
+            slug: windows
+          - runner: macos-latest
+            slug: macos
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install accelerated runtime and packager
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[fast,build]"
+      - name: Build one-file console executable
+        run: >-
+          python -m PyInstaller --onefile --noconfirm --clean
+          --name nfvpn-mini-server --paths . --collect-all cryptography
+          --distpath dist --specpath build/pyinstaller
+          --workpath build/pyinstaller-work tools/mini_server_entry.py
+      - name: Smoke-test executable help
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            dist/nfvpn-mini-server.exe --help
+          else
+            ./dist/nfvpn-mini-server --help
+          fi
+      - name: Name executable for release
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Linux) system=linux ;;
+            Windows) system=windows ;;
+            macOS) system=macos ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          architecture=$(python -c 'import platform; a=platform.machine().lower(); print({"amd64": "x86_64", "arm64": "aarch64"}.get(a, a))')
+          extension=""
+          source=dist/nfvpn-mini-server
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            extension=.exe
+            source=dist/nfvpn-mini-server.exe
+          fi
+          mkdir -p release-assets
+          cp "$source" "release-assets/nfvpn-mini-server-${system}-${architecture}${extension}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.slug }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 5
+
+  publish-release:
+    name: Publish packages and executables
+    needs: [python-packages, native-executables]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-assets
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: release-assets
+        run: sha256sum * > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: NoFlagVPN ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-assets/*
+          fail_on_unmatched_files: true

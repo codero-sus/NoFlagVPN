@@ -15,8 +15,10 @@ __all__ = ["main"]
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run the relay command with the supplied options."""
+    """Run the relay command, defaulting to ``./config.json``."""
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if not any(item == "--config" or item.startswith("--config=") for item in arguments):
+        arguments = ["--config", "config.json", *arguments]
     return cli_main(["serve", *arguments])
 
 

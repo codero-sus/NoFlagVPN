@@ -49,6 +49,40 @@ still needs Python 3.10+ (use `python3 dist/nfvpn-mini-server.pyz ...` if its
 platform does not launch `.pyz` files directly). The artifact is generated
 locally and is ignored by Git.
 
+To build a native executable for the current OS, install the optional packager
+and run the make target:
+
+```bash
+make dev
+.venv/bin/pip install -e '.[fast,build]'
+make native-mini-server
+```
+
+The native build is OS-specific; use a Windows runner to build Windows, and a
+macOS runner to build macOS. The release workflow builds each artifact on its
+native GitHub runner.
+
+For native Linux, Windows, and macOS binaries, plus a source archive and the
+portable wheel, the release workflow builds assets on each OS and attaches them
+to the GitHub Release when a `v*` tag is pushed. It also publishes `SHA256SUMS`.
+Build only on a release tag after the change is merged; the native executable is
+unsigned, so Windows SmartScreen or macOS Gatekeeper may show an origin warning.
+
+Start a native or zipapp server with a JSON config. Both read `./config.json`
+by default; pass `--config PATH` to select another file:
+
+```bash
+cp examples/mini-server.config.json config.json
+nfvpn-mini-server
+# or, for the zipapp:
+./dist/nfvpn-mini-server.pyz
+```
+
+The example binds all interfaces and references TLS certificate, private key,
+identity, and membership files. Put the real files in place, protect private
+keys and membership data, and restrict inbound traffic with your host firewall.
+Do not expose a relay without TLS and an explicit egress policy.
+
 ## Updating
 
 ```bash
