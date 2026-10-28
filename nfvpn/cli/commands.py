@@ -48,6 +48,7 @@ from nfvpn.traffic import profile_names
 from nfvpn.version import __version__
 
 __all__ = [
+    "cmd_configure",
     "cmd_connect",
     "cmd_demo",
     "cmd_doctor",
@@ -130,11 +131,30 @@ def _install_signals(loop, *, on_stop, on_reload=None) -> bool:
 
 
 # --------------------------------------------------------------------------- #
-# init / keygen / token / member
+# init / configure / keygen / token / member
 # --------------------------------------------------------------------------- #
+def cmd_configure(args) -> int:
+    """Create or update relay settings from one command line."""
+    target = Path(args.config).expanduser() if args.config else config_dir() / "relay.json"
+    created = not target.exists()
+    if created:
+        initialize_server(target)
+    config = ServerConfig.load(target)
+    config = _apply_server_overrides(config, args)
+    config.save(target)
+
+    _print(f"saved relay config: {target}")
+    _print(f"start the relay with: nfvpn serve --config {target}")
+    if config.listen_host not in ("127.0.0.1", "::1", "localhost") and not config.tls_cert:
+        _print("warning: this config binds off-loopback without TLS")
+    if created:
+        _print("generated a private relay identity and an empty, closed member allowlist")
+    return EXIT_OK
+
+
 def cmd_init(args) -> int:
     """Initialize a local-only relay config, key and closed membership list."""
-    setup = initialize_server(args.config)
+    setup = initialize_server(args.config or "config.json")
     result = {
         "config": str(setup.config_path),
         "identity_file": str(setup.identity_path),
@@ -462,12 +482,18 @@ def _apply_server_overrides(config: ServerConfig, args) -> ServerConfig:
         changes["profile"] = args.profile
     if getattr(args, "encoding", None):
         changes["encoding"] = args.encoding
-    if getattr(args, "tls_cert", None):
-        changes["tls_cert"] = args.tls_cert
-    if getattr(args, "tls_key", None):
-        changes["tls_key"] = args.tls_key
+    if getattr(args, "no_tls", False):
+        changes["tls_cert"] = None
+        changes["tls_key"] = None
+    else:
+        if getattr(args, "tls_cert", None):
+            changes["tls_cert"] = args.tls_cert
+        if getattr(args, "tls_key", None):
+            changes["tls_key"] = args.tls_key
     if getattr(args, "no_cover", False):
         changes["cover_traffic"] = False
+    elif getattr(args, "cover", False):
+        changes["cover_traffic"] = True
     if getattr(args, "stats_interval", None) is not None:
         changes["stats_interval"] = args.stats_interval
     if getattr(args, "limit_mbps", None) is not None:
@@ -489,6 +515,16 @@ def _apply_server_overrides(config: ServerConfig, args) -> ServerConfig:
         changes["max_streams"] = args.max_streams
     if getattr(args, "idle_timeout", None) is not None:
         changes["idle_timeout"] = args.idle_timeout
+    if getattr(args, "handshake_timeout", None) is not None:
+        changes["handshake_timeout"] = args.handshake_timeout
+    if getattr(args, "connect_timeout", None) is not None:
+        changes["connect_timeout"] = args.connect_timeout
+    if getattr(args, "rekey_seconds", None) is not None:
+        changes["rekey_seconds"] = args.rekey_seconds
+    if getattr(args, "window", None) is not None:
+        changes["window"] = args.window
+    if getattr(args, "log_file", None) is not None:
+        changes["log_file"] = args.log_file or None
 
     egress_changes: dict = {}
     if getattr(args, "allow_port", None) is not None:
@@ -499,6 +535,10 @@ def _apply_server_overrides(config: ServerConfig, args) -> ServerConfig:
         egress_changes["allow_networks"] = tuple(args.allow_network)
     if getattr(args, "deny_network", None):
         egress_changes["deny_networks"] = tuple(args.deny_network)
+    if getattr(args, "allow_domain", None):
+        egress_changes["allow_domains"] = tuple(args.allow_domain)
+    if getattr(args, "deny_domain", None):
+        egress_changes["deny_domains"] = tuple(args.deny_domain)
     if getattr(args, "allow_private", False):
         egress_changes["allow_private_literals"] = True
 

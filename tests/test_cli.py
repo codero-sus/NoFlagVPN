@@ -67,6 +67,48 @@ def test_init_creates_safe_config_identity_and_empty_membership(capsys, tmp_path
         assert membership_path.stat().st_mode & 0o077 == 0
 
 
+def test_configure_writes_command_line_settings_for_the_next_serve(capsys, tmp_path):
+    config_path = tmp_path / "relay.json"
+    code, _out, err = run(
+        capsys,
+        "configure",
+        "--config",
+        str(config_path),
+        "--listen",
+        "127.0.0.1:9555",
+        "--ws-path",
+        "/relay",
+        "--no-tls",
+    )
+
+    assert code == 0, err
+    config = ServerConfig.load(config_path)
+    assert (config.listen_host, config.listen_port, config.ws_path) == (
+        "127.0.0.1",
+        9555,
+        "/relay",
+    )
+    assert config.tls_cert is None and config.tls_key is None
+    assert config_path.parent.joinpath("data", "relay.key").is_file()
+    assert config_path.parent.joinpath("data", "members.json").is_file()
+
+
+def test_root_config_flags_are_a_configure_command(capsys, tmp_path):
+    config_path = tmp_path / "relay.json"
+    code, _out, err = run(
+        capsys,
+        "--config",
+        str(config_path),
+        "--listen",
+        "127.0.0.1:9556",
+        "--no-tls",
+    )
+
+    assert code == 0, err
+    config = ServerConfig.load(config_path)
+    assert config.listen_port == 9556
+
+
 def test_init_refuses_to_overwrite_existing_config(capsys, tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text('{"keep": true}\n', encoding="utf-8")
@@ -89,6 +131,7 @@ def test_the_parser_accepts_every_documented_command():
     parser = build_parser()
     for argv in (
         ["init"],
+        ["configure"],
         ["keygen"],
         ["token", "--member", "x"],
         ["member", "list"],

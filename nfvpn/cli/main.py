@@ -20,6 +20,54 @@ __all__ = ["build_parser", "main"]
 _ENCODINGS = ("binary", "text")
 
 
+def _add_server_options(
+    parser: argparse.ArgumentParser,
+    *,
+    log_level_default: str | None = "info",
+    include_allow_private: bool = False,
+    include_quiet: bool = False,
+) -> None:
+    """Attach the common one-line relay settings to configure and serve."""
+    parser.add_argument("--config", help="relay config file")
+    parser.add_argument("--listen", help="host:port (default 127.0.0.1:8443)")
+    parser.add_argument("--ws-path", help="URL path clients dial (default /)")
+    parser.add_argument("--profile", choices=profile_names(), help="traffic shaping profile")
+    parser.add_argument("--encoding", choices=_ENCODINGS, help="record encoding")
+    parser.add_argument("--tls-cert", help="TLS certificate file")
+    parser.add_argument("--tls-key", help="TLS private key file")
+    parser.add_argument("--no-tls", action="store_true", help="disable TLS explicitly")
+    parser.add_argument("--no-cover", action="store_true", help="do not send padding while idle")
+    parser.add_argument("--cover", action="store_true", help="enable padding while idle")
+    parser.add_argument("--cover-page", help="HTML file served to non-WebSocket requests")
+    parser.add_argument("--server-header", help="Server: header to send ('' to omit)")
+    parser.add_argument("--stats-interval", type=float, help="log counters every N seconds")
+    parser.add_argument("--limit-mbps", type=float, help="cap each member's bandwidth")
+    parser.add_argument("--max-streams", type=int)
+    parser.add_argument("--idle-timeout", type=float)
+    parser.add_argument("--handshake-timeout", type=float)
+    parser.add_argument("--connect-timeout", type=float)
+    parser.add_argument("--rekey-seconds", type=float)
+    parser.add_argument("--window", type=int, help="flow-control window in bytes")
+    parser.add_argument("--identity-file")
+    parser.add_argument("--membership-file")
+    parser.add_argument("--allow-port", type=int, action="append", help="restrict egress ports")
+    parser.add_argument("--deny-port", type=int, action="append", help="refuse an egress port")
+    parser.add_argument("--allow-network", action="append", help="restrict egress destinations")
+    parser.add_argument("--deny-network", action="append", help="refuse an egress range")
+    parser.add_argument("--allow-domain", action="append", help="restrict egress hostnames")
+    parser.add_argument("--deny-domain", action="append", help="refuse an egress hostname suffix")
+    if include_allow_private:
+        parser.add_argument(
+            "--allow-private",
+            action="store_true",
+            help="let the relay dial private addresses (test rigs only)",
+        )
+    parser.add_argument("--log-level", default=log_level_default)
+    parser.add_argument("--log-file")
+    if include_quiet:
+        parser.add_argument("--quiet", action="store_true")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The whole command tree."""
     parser = argparse.ArgumentParser(
@@ -31,11 +79,14 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Run `nfvpn selftest` after installing to check the whole thing end to end.",
     )
     parser.add_argument("--version", action="version", version=f"nfvpn {__version__}")
+    parser.add_argument(
+        "--config", dest="global_config", help="config path (before a command, e.g. nfvpn --config relay.json serve)"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # -- init --------------------------------------------------------------
     init = subparsers.add_parser("init", help="create a safe, local-only relay setup")
-    init.add_argument("--config", default="config.json", help="where to write the relay config")
+    init.add_argument("--config", help="where to write the relay config (default: config.json)")
     init.add_argument("--json", action="store_true", help="print created paths as JSON")
     init.set_defaults(func=commands.cmd_init)
 
@@ -105,35 +156,15 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--name")
     member.set_defaults(func=commands.cmd_member)
 
-    # -- serve -------------------------------------------------------------
-    serve = subparsers.add_parser("serve", help="run the relay")
-    serve.add_argument("--config", help="relay config file")
-    serve.add_argument("--listen", help="host:port (default 127.0.0.1:8443)")
-    serve.add_argument("--ws-path", help="URL path clients dial (default /)")
-    serve.add_argument("--profile", choices=profile_names(), help="traffic shaping profile")
-    serve.add_argument("--encoding", choices=_ENCODINGS, help="how records ride in WebSocket frames")
-    serve.add_argument("--tls-cert")
-    serve.add_argument("--tls-key")
-    serve.add_argument("--no-cover", action="store_true", help="do not send padding while idle")
-    serve.add_argument("--cover-page", help="HTML file served to non-WebSocket requests")
-    serve.add_argument("--server-header", help="Server: header to send ('' to omit)")
-    serve.add_argument("--stats-interval", type=float, help="log counters every N seconds")
-    serve.add_argument("--limit-mbps", type=float, help="cap each member's bandwidth")
-    serve.add_argument("--max-streams", type=int)
-    serve.add_argument("--idle-timeout", type=float)
-    serve.add_argument("--identity-file")
-    serve.add_argument("--membership-file")
-    serve.add_argument("--allow-port", type=int, action="append", help="restrict egress ports")
-    serve.add_argument("--deny-port", type=int, action="append", help="refuse an egress port")
-    serve.add_argument("--allow-network", action="append", help="restrict egress destinations")
-    serve.add_argument("--deny-network", action="append", help="refuse an egress range")
-    serve.add_argument(
-        "--allow-private",
-        action="store_true",
-        help="let the relay dial private addresses (test rigs only)",
+    # -- configure / serve -----------------------------------------------
+    configure = subparsers.add_parser(
+        "configure", help="write relay settings from command-line options (no file editing)"
     )
-    serve.add_argument("--log-level", default="info")
-    serve.add_argument("--quiet", action="store_true")
+    _add_server_options(configure, log_level_default=None)
+    configure.set_defaults(func=commands.cmd_configure)
+
+    serve = subparsers.add_parser("serve", help="run the relay")
+    _add_server_options(serve, include_allow_private=True, include_quiet=True)
     serve.set_defaults(func=commands.cmd_serve)
 
     # -- connect -----------------------------------------------------------
@@ -245,7 +276,21 @@ def main(argv: list[str] | None = None) -> int:
     # sys.argv[1:] rather than argv=None, so the opaque-value rewrite below
     # applies to the real command line too and not only to in-process calls.
     arguments = list(sys.argv[1:] if argv is None else argv)
+    # A root-level config path followed by settings is a configure-once command:
+    # `nfvpn --config relay.json --listen 127.0.0.1:8443`. An explicit command
+    # still wins, as in `nfvpn --config relay.json serve`.
+    if arguments and (arguments[0] == "--config" or arguments[0].startswith("--config=")):
+        command_index = 2 if arguments[0] == "--config" else 1
+        command_names = {
+            "configure", "connect", "demo", "doctor", "init", "keygen", "member",
+            "probe", "selftest", "serve", "token", "version",
+        }
+        if command_index >= len(arguments) or arguments[command_index] not in command_names:
+            arguments.insert(command_index, "configure")
     args = parser.parse_args(_rejoin_opaque_values(arguments))
+    global_config = getattr(args, "global_config", None)
+    if global_config and hasattr(args, "config") and not args.config:
+        args.config = global_config
     function = getattr(args, "func", None)
     if function is None:  # pragma: no cover - argparse enforces a subcommand
         parser.print_help()

@@ -83,9 +83,20 @@ nfvpn-mini-server            # first run initializes config.json if absent
 ```
 
 First-run defaults bind only to `127.0.0.1`, disable TLS, and authorize no
-clients. Before exposing the relay, configure TLS, set an appropriate bind
-address, and add authorized members. Protect the generated private key and
-membership file, and restrict inbound traffic with your host firewall.
+clients. To set production options in one CLI line without editing JSON, then
+start the relay with the saved settings:
+
+```bash
+nfvpn configure --listen 0.0.0.0:8443 --ws-path /cdn --tls-cert ./certs/relay.crt --tls-key ./certs/relay.key --profile balanced
+nfvpn serve
+# equivalent, with a specific config path:
+nfvpn --config ./relay.json --listen 0.0.0.0:8443 --ws-path /cdn --tls-cert ./certs/relay.crt --tls-key ./certs/relay.key --profile balanced
+nfvpn serve --config ./relay.json
+```
+
+Before exposing the relay, provide valid TLS files and add authorized members.
+Protect the generated private key and membership file, and restrict inbound
+traffic with your host firewall.
 
 ## Updating
 
@@ -148,6 +159,7 @@ make selftest     # ~30 end-to-end checks on loopback
 | Command | What it does |
 | --- | --- |
 | `nfvpn init` | Create a safe, local-only relay config and private state files. |
+| `nfvpn configure` | Save relay settings supplied as command-line flags; no editing JSON. |
 | `nfvpn keygen` | Create this machine's long-term identity. |
 | `nfvpn token` | Print one string that carries everything a client needs. |
 | `nfvpn member {add,list,revoke,remove}` | Manage a relay's allowlist. |
