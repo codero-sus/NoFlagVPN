@@ -68,19 +68,20 @@ to the GitHub Release when a `v*` tag is pushed. It also publishes `SHA256SUMS`.
 Build only on a release tag after the change is merged; the native executable is
 unsigned, so Windows SmartScreen or macOS Gatekeeper may show an origin warning.
 
-Start a native or zipapp server with a JSON config. Both read `./config.json`
-by default; pass `--config PATH` to select another file:
+The repository includes a starter `config.json` in its root. The native
+executable and zipapp read `./config.json` by default; pass `--config PATH` to
+select another file:
 
 ```bash
-cp examples/mini-server.config.json config.json
 nfvpn-mini-server
 # or, for the zipapp:
 ./dist/nfvpn-mini-server.pyz
 ```
 
-The example binds all interfaces and references TLS certificate, private key,
-identity, and membership files. Put the real files in place, protect private
-keys and membership data, and restrict inbound traffic with your host firewall.
+The starter config binds all interfaces and references TLS certificate, private
+key, identity, and membership files. Put the real files in place, protect
+private keys and membership data, and restrict inbound traffic with your host
+firewall.
 Do not expose a relay without TLS and an explicit egress policy.
 
 ## Updating

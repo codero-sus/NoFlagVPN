@@ -24,7 +24,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-python-packages
-          path: dist/*
+          path: |
+            config.json
+            dist/*
           if-no-files-found: error
           retention-days: 5
 

@@ -30,7 +30,7 @@ def test_mini_server_respects_explicit_config_path(monkeypatch):
 
 
 def test_release_config_is_valid_and_uses_private_egress_defaults():
-    config = ServerConfig.load(Path(__file__).parents[1] / "examples" / "mini-server.config.json")
+    config = ServerConfig.load(Path(__file__).parents[1] / "config.json")
     assert config.listen_host == "0.0.0.0"
     assert config.tls_cert == "./certs/relay.crt"
     assert config.tls_key == "./certs/relay.key"
