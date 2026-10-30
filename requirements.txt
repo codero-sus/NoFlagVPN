@@ -1,0 +1,21 @@
+# NoFlagVPN runtime dependencies.
+#
+# Intentionally EMPTY.
+#
+# The daemon, client and CLI run on the Python standard library alone (3.10+).
+# A circumvention tool should be:
+#   * auditable   — every line that touches the wire is code you can read,
+#   * drop-in      — `git clone && python -m nfvpn` with no wheels or compilers,
+#   * low surface  — no dependency tree that can be tangled into supply-chain
+#                    pressure or flagged by a host's file scanner.
+#
+# Cryptography (ChaCha20-Poly1305, HKDF, HMAC, X25519) is implemented in
+# `nfvpn/core/primitives.py` against the published RFC test vectors, which are
+# replayed in `tests/test_primitives.py`.
+#
+# OPTIONAL ACCELERATION (not required, never imported at import time):
+#   pip install cryptography
+# If present, nfvpn transparently uses it for ~100x faster bulk encryption
+# via `cryptography.hazmat.primitives.ciphers.aead.ChaCha20Poly1305`.
+# Both backends are byte-for-byte wire compatible and are exercised by the
+# same test suite.
