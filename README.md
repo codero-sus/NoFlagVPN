@@ -87,10 +87,10 @@ clients. To set production options in one CLI line without editing JSON, then
 start the relay with the saved settings:
 
 ```bash
-nfvpn configure --listen 0.0.0.0:8443 --ws-path /cdn --tls-cert ./certs/relay.crt --tls-key ./certs/relay.key --profile balanced
+nfvpn configure --listen auto --ws-path /cdn --tls-cert ./certs/relay.crt --tls-key ./certs/relay.key --profile balanced
 nfvpn serve
 # equivalent, with a specific config path:
-nfvpn --config ./relay.json --listen 0.0.0.0:8443 --ws-path /cdn --tls-cert ./certs/relay.crt --tls-key ./certs/relay.key --profile balanced
+nfvpn --config ./relay.json --listen auto --ws-path /cdn --tls-cert ./certs/relay.crt --tls-key ./certs/relay.key --profile balanced
 nfvpn serve --config ./relay.json
 ```
 
@@ -137,6 +137,10 @@ On the laptop:
 nfvpn keygen --name client --json         # copy `public_key` back to the relay
 nfvpn connect --token 'nfvpn://…'         # a SOCKS5 + HTTP proxy on 127.0.0.1:8080
 ```
+
+When the relay listens on all interfaces (`nfvpn configure --listen auto`),
+`nfvpn token --member NAME` detects the IP selected by Linux's network route and
+uses it in the invite. Pass `--host` if you want to choose a different address.
 
 `--name` decides the file name, and the defaults that matter are `relay.key`
 (what `serve` loads) and `client.key` (what `connect` loads).  If you use another

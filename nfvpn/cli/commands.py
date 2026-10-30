@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import ipaddress
 import json
 import logging
 import platform
@@ -104,6 +105,54 @@ def _wildcard(host: str) -> str:
 
 def _is_loopback(host: str) -> bool:
     return host in ("127.0.0.1", "::1", "localhost")
+
+
+def _discover_lan_address() -> str:
+    """Detect the source IP selected for the system's default outbound route.
+
+    A UDP connect asks the local OS to select a route/source address but sends no
+    packet. Hostname resolution is a fallback for networks without a default
+    route; loopback and link-local addresses are never advertised.
+    """
+    for family, target in (
+        (socket.AF_INET, ("8.8.8.8", 53)),
+        (socket.AF_INET6, ("2001:4860:4860::8888", 53, 0, 0)),
+    ):
+        try:
+            with socket.socket(family, socket.SOCK_DGRAM) as probe:
+                probe.connect(target)
+                candidate = probe.getsockname()[0]
+            address = ipaddress.ip_address(candidate.split("%", 1)[0])
+            if not (address.is_loopback or address.is_link_local or address.is_unspecified):
+                return str(address)
+        except OSError:
+            continue
+
+    try:
+        candidates = socket.getaddrinfo(socket.gethostname(), None, type=socket.SOCK_DGRAM)
+    except OSError:
+        candidates = []
+    for candidate in candidates:
+        host = candidate[4][0]
+        if not isinstance(host, str):
+            continue
+        try:
+            address = ipaddress.ip_address(host.split("%", 1)[0])
+        except ValueError:
+            continue
+        if not (address.is_loopback or address.is_link_local or address.is_unspecified):
+            return str(address)
+    raise ConfigError("could not detect a LAN IP; pass --host explicitly to `nfvpn token`")
+
+
+def _relay_host(config: ServerConfig, override: str | None = None) -> str:
+    """Return a relay host, auto-detecting the local IP for wildcard binds."""
+    host = override or config.listen_host
+    if not override and host in ("0.0.0.0", "::"):
+        host = _discover_lan_address()
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
 
 
 def _print(message: str = "") -> None:
@@ -442,8 +491,11 @@ def cmd_token(args) -> int:
             raise ConfigError(f"no member named {args.member!r} in {store.path}")
         if not member.is_usable():
             raise ConfigError(f"member {args.member!r} is revoked or expired")
-        host = args.host or ("relay.local" if config.listen_host == "0.0.0.0" else config.listen_host)
-        relay = args.relay or f"{'wss' if config.tls_cert else 'ws'}://{host}:{config.listen_port}{config.ws_path}"
+        if args.relay:
+            relay = args.relay
+        else:
+            host = _relay_host(config, args.host)
+            relay = f"{'wss' if config.tls_cert else 'ws'}://{host}:{config.listen_port}{config.ws_path}"
         invite = Invite(
             relay=relay,
             peer_public_key=b64e(identity.public_key),
@@ -475,7 +527,10 @@ def cmd_token(args) -> int:
 def _apply_server_overrides(config: ServerConfig, args) -> ServerConfig:
     changes: dict = {}
     if getattr(args, "listen", None):
-        changes["listen_host"], changes["listen_port"] = parse_bind(args.listen, config.listen_port)
+        if args.listen.strip().lower() == "auto":
+            changes["listen_host"], changes["listen_port"] = "0.0.0.0", config.listen_port
+        else:
+            changes["listen_host"], changes["listen_port"] = parse_bind(args.listen, config.listen_port)
     if getattr(args, "ws_path", None):
         changes["ws_path"] = args.ws_path
     if getattr(args, "profile", None):

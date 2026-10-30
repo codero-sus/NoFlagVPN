@@ -356,7 +356,8 @@ def test_a_tls_relay_produces_a_wss_token(capsys, isolated_config):
     assert invite.relay.startswith("wss://"), "a TLS relay must not be handed out as ws://"
 
 
-def test_a_bound_to_everything_relay_does_not_hand_out_0000(capsys, isolated_config):
+def test_a_bound_to_everything_relay_uses_its_detected_ip(monkeypatch, capsys, isolated_config):
+    monkeypatch.setattr("nfvpn.cli.commands._discover_lan_address", lambda: "192.168.1.20")
     isolated_config.mkdir(parents=True, exist_ok=True)
     ServerConfig(listen_host="0.0.0.0", listen_port=8443).save(isolated_config / "relay.json")
     Identity.load_or_create(isolated_config / "relay.key", "relay")
@@ -365,7 +366,7 @@ def test_a_bound_to_everything_relay_does_not_hand_out_0000(capsys, isolated_con
 
     invite = decode_invite(run_ok(capsys, "token", "--member", "laptop").strip())
     assert "0.0.0.0" not in invite.relay, "0.0.0.0 is not an address a client can dial"
-    assert invite.relay.startswith("ws://relay.local:")
+    assert invite.relay.startswith("ws://192.168.1.20:8443/")
 
 
 def test_a_token_for_an_unknown_or_revoked_member_is_refused(capsys, isolated_config):

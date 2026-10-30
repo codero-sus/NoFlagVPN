@@ -29,7 +29,10 @@ def _add_server_options(
 ) -> None:
     """Attach the common one-line relay settings to configure and serve."""
     parser.add_argument("--config", help="relay config file")
-    parser.add_argument("--listen", help="host:port (default 127.0.0.1:8443)")
+    parser.add_argument(
+        "--listen",
+        help="host:port, or 'auto' to bind all interfaces and auto-detect the invite IP",
+    )
     parser.add_argument("--ws-path", help="URL path clients dial (default /)")
     parser.add_argument("--profile", choices=profile_names(), help="traffic shaping profile")
     parser.add_argument("--encoding", choices=_ENCODINGS, help="record encoding")

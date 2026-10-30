@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 import pytest
+from nfvpn.cli import commands as cli_commands
 from nfvpn.cli.main import build_parser, main
 from nfvpn.config import ServerConfig
 from nfvpn.core.encoding import b64d, fingerprint
@@ -107,6 +108,26 @@ def test_root_config_flags_are_a_configure_command(capsys, tmp_path):
     assert code == 0, err
     config = ServerConfig.load(config_path)
     assert config.listen_port == 9556
+
+
+def test_listen_auto_binds_all_interfaces_and_token_uses_detected_ip(monkeypatch, capsys, tmp_path):
+    config_path = tmp_path / "relay.json"
+    code, _out, err = run(
+        capsys,
+        "configure",
+        "--config",
+        str(config_path),
+        "--listen",
+        "auto",
+        "--no-tls",
+    )
+
+    assert code == 0, err
+    config = ServerConfig.load(config_path)
+    assert config.listen_host == "0.0.0.0"
+    monkeypatch.setattr(cli_commands, "_discover_lan_address", lambda: "192.168.1.20")
+    assert cli_commands._relay_host(config) == "192.168.1.20"
+    assert cli_commands._relay_host(config, "relay.example") == "relay.example"
 
 
 def test_init_refuses_to_overwrite_existing_config(capsys, tmp_path):
